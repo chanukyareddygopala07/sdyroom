@@ -1,0 +1,3 @@
+-- Intentionally empty. This project seeds no rooms and no auth users.
+-- Local test data is created only through the Auth API and the create_room RPC;
+-- see docs/local-supabase.md.

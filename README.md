@@ -91,6 +91,14 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   milestone, so this command exits non-zero today — that is deliberate, so missing
   integration tests cannot silently pass. See `tests/integration/README.md`.
 
+## Local Supabase
+
+The database foundation runs entirely locally through the pinned CLI
+(`npx supabase start`), with Postgres on port **54322** — never the Homebrew server on
+5432. See [docs/local-supabase.md](docs/local-supabase.md) for the schema, grants, RLS
+policies, the `create_room` RPC, how owner-membership atomicity is enforced, and the
+verification commands.
+
 ## Features
 
 - Works across the entire [Next.js](https://nextjs.org) stack
