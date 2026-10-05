@@ -40,15 +40,17 @@ export function SignUpForm({
     }
 
     try {
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/protected`,
+          emailRedirectTo: `${window.location.origin}/rooms`,
         },
       });
       if (error) throw error;
-      router.push("/auth/sign-up-success");
+      // Auto-confirm creates the session immediately, so the new user goes
+      // straight to onboarding; otherwise we wait for the email confirmation.
+      router.push(data.session ? "/onboarding" : "/auth/sign-up-success");
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred");
     } finally {

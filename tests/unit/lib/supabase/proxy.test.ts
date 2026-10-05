@@ -41,7 +41,7 @@ describe("updateSession", () => {
     getClaims.mockResolvedValue({ data: { claims: null } });
     const updateSession = await loadUpdateSession(SUPABASE_ENV);
 
-    const response = await updateSession(request("/protected"));
+    const response = await updateSession(request("/rooms"));
 
     expect(response.status).toBe(307);
     expect(redirectPath(response)).toBe("/auth/login");
@@ -53,11 +53,24 @@ describe("updateSession", () => {
     });
     const updateSession = await loadUpdateSession(SUPABASE_ENV);
 
-    const response = await updateSession(request("/protected"));
+    const response = await updateSession(request("/rooms"));
 
     expect(response.headers.get("location")).toBeNull();
     expect(response.status).toBe(200);
   });
+
+  it.each(["/api/rooms", "/api/profile"])(
+    "never redirects the API route %s, so the handler can answer 401",
+    async (path) => {
+      getClaims.mockResolvedValue({ data: { claims: null } });
+      const updateSession = await loadUpdateSession(SUPABASE_ENV);
+
+      const response = await updateSession(request(path));
+
+      expect(response.headers.get("location")).toBeNull();
+      expect(getClaims).toHaveBeenCalled();
+    },
+  );
 
   it("never redirects the public landing page", async () => {
     getClaims.mockResolvedValue({ data: { claims: null } });
@@ -87,7 +100,7 @@ describe("updateSession", () => {
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: undefined,
     });
 
-    const response = await updateSession(request("/protected"));
+    const response = await updateSession(request("/rooms"));
 
     expect(getClaims).not.toHaveBeenCalled();
     expect(response.headers.get("location")).toBeNull();

@@ -47,9 +47,14 @@ export async function updateSession(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims;
 
+  // API routes answer their own 401 as JSON; handing a fetch client an HTML
+  // redirect would break the documented status contract.
+  const isApiRoute = request.nextUrl.pathname.startsWith("/api");
+
   if (
     request.nextUrl.pathname !== "/" &&
     !user &&
+    !isApiRoute &&
     !request.nextUrl.pathname.startsWith("/login") &&
     !request.nextUrl.pathname.startsWith("/auth")
   ) {

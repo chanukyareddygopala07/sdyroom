@@ -78,7 +78,7 @@ describe("LoginForm", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Login" }));
 
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/protected"));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/rooms"));
     expect(screen.queryByText("Invalid login credentials")).toBeNull();
   });
 
@@ -100,6 +100,6 @@ describe("LoginForm", () => {
     ).toBeDisabled();
 
     finishSignIn({ error: null });
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/protected"));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/rooms"));
   });
 });

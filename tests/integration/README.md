@@ -13,13 +13,13 @@ Runs `vitest run --config vitest.integration.config.ts`, which only discovers
 `tests/integration/**/*.test.ts` and is excluded from `npm test`.
 
 **The suite is empty on purpose and the command fails (exit code 1, "No test files
-found") until the Supabase/database milestone.** `passWithNoTests` is deliberately
-not set in `vitest.integration.config.ts` so a missing integration suite can never
-silently pass a gate.
+found").** `passWithNoTests` is deliberately not set in `vitest.integration.config.ts`
+so a missing integration suite can never silently pass a gate.
 
-Deferred to that milestone: real-auth and RLS integration tests (schema, migrations,
-RLS policies asserted against authenticated users). Do not treat the current failure
-as a regression, and do not re-add `passWithNoTests`.
+Still owed here: real-auth and RLS integration tests (schema, migrations, RLS policies
+asserted against authenticated users) — the database and application milestones exist
+without them. Do not treat the current failure as a regression, and do not re-add
+`passWithNoTests`.
 
 ## Prerequisites
 
@@ -32,7 +32,7 @@ as a regression, and do not re-add `passWithNoTests`.
 
    Requires Docker. Do not use the Homebrew PostgreSQL instance on port 5432.
 
-2. Migrations applied (database milestone):
+2. Migrations applied:
 
    ```bash
    npx supabase db reset
@@ -49,5 +49,5 @@ Export these in the shell that runs `npm run test:integration`. They are read fr
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Client-side key, used by app code under test | from `npx supabase status` |
 | `SUPABASE_SECRET_KEY` | Service-role key for admin/RLS setup helpers | from `npx supabase status` |
 
-Test users, passwords and the tables they exercise belong to the database
-milestone and will be documented alongside those tests.
+Test users, passwords and the tables they exercise will be documented alongside
+those tests.

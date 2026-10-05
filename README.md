@@ -1,10 +1,8 @@
-<a href="https://demo-nextjs-with-supabase.vercel.app/">
-  <img alt="Next.js and Supabase Starter Kit - the fastest way to build apps with Next.js and Supabase" src="https://demo-nextjs-with-supabase.vercel.app/opengraph-image.png">
-  <h1 align="center">Next.js and Supabase Starter Kit</h1>
-</a>
+<img alt="SdyRoom" src="https://demo-nextjs-with-supabase.vercel.app/opengraph-image.png">
+<h1 align="center">SdyRoom</h1>
 
 <p align="center">
- The fastest way to build apps with Next.js and Supabase
+ Capacity-limited study rooms for exam prep, built with Next.js and Supabase
 </p>
 
 <p align="center">
@@ -87,9 +85,9 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**`. The suite is intentionally empty until the Supabase
-  milestone, so this command exits non-zero today — that is deliberate, so missing
-  integration tests cannot silently pass. See `tests/integration/README.md`.
+  over `tests/integration/**`. The suite is still empty, so this command exits
+  non-zero — that is deliberate, so missing integration tests cannot silently pass.
+  See `tests/integration/README.md`.
 
 ## Local Supabase
 
@@ -98,6 +96,48 @@ The database foundation runs entirely locally through the pinned CLI
 5432. See [docs/local-supabase.md](docs/local-supabase.md) for the schema, grants, RLS
 policies, the `create_room` RPC, how owner-membership atomicity is enforced, and the
 verification commands.
+
+## Application
+
+SdyRoom is a minimal working application on top of this starter: sign up, pick a
+unique study alias once, then discover public rooms and create your own.
+
+| Route | Access | What it does |
+| --- | --- | --- |
+| `/` | public | Landing page with sign-up and browse calls to action |
+| `/auth/*` | public | Password auth. Local Supabase has email auto-confirm on, so sign-up returns a session and routes to `/onboarding`; otherwise the success page is shown |
+| `/onboarding` | signed in | One-time study alias via `POST /api/profile` |
+| `/rooms` | signed in | Public room discovery with a `?q=` search over name, subject and exam track |
+| `/rooms/new` | signed in, alias chosen | Create a room via `POST /api/rooms` |
+| `GET /api/rooms` | signed in | Shaped public rooms, `401` when unauthenticated |
+| `POST /api/profile` | signed in | Creates the profile row, `409 alias_taken` on a case-insensitive collision |
+| `POST /api/rooms` | signed in, alias chosen | `401` / `400 validation` / `403 onboarding_required` / `201` |
+
+How the pieces fit together:
+
+- **Session**: `proxy.ts` → `lib/supabase/proxy.ts#updateSession` refreshes cookies
+  and sends unauthenticated visitors (everything except `/`, `/auth/*` and `/api/*`)
+  to `/auth/login`. API routes are exempt on purpose so a `fetch` client gets the
+  documented JSON `401` instead of an HTML redirect. Each session-gated page re-checks the session and, for rooms, the
+  profile row; they export `instant = false` because the project runs with
+  `cacheComponents` and these routes must render per request.
+- **Validation**: `lib/validation/` (Zod) mirrors the CHECK constraints in
+  `supabase/migrations/0001_init.sql`, so bad input is rejected in the browser, at
+  the API boundary and again in the database.
+- **Database access**: `lib/profiles/queries.ts` and `lib/rooms/` — public rooms are
+  read with an explicit column list and mapped through `toPublicRoom()`, so
+  `owner_id` and any future private column can never reach a response. Rooms are
+  only ever created through the `create_room` RPC; the owner is taken from
+  `auth.uid()` and never accepted from the client.
+- **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
+  } }`, built by `lib/api/responses.ts`.
+
+### Layout note
+
+The original brief assumed a `src/` tree (`src/lib/...`). This repository keeps the
+starter's root-level `app/`, `lib/` and `components/`, so those modules live at
+`lib/validation/`, `lib/rooms/`, `lib/profiles/` and `lib/api/` instead of
+`src/lib/...`. Route and test paths are otherwise unchanged.
 
 ## Features
 
