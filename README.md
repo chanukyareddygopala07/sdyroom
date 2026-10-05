@@ -30,6 +30,9 @@ All dependencies are pinned to exact versions (no `^`, `~` or `latest`) in `pack
 | @supabase/ssr | 0.12.7 |
 | @supabase/supabase-js | 2.117.2 |
 | supabase (CLI, devDependency) | 2.119.0 |
+| tailwindcss | 4.3.3 |
+| @tailwindcss/postcss | 4.3.3 |
+| eslint-config-next | 16.3.8 |
 | vitest | 5.0.3 |
 | vite | 8.3.2 |
 | jsdom | 30.1.2 |
@@ -37,6 +40,46 @@ All dependencies are pinned to exact versions (no `^`, `~` or `latest`) in `pack
 **Next.js 16.3.8 is an intentional, security-driven deviation from the originally
 specified 16.3.4.** 16.3.8 is the patched release on the 16.3.x line and is what the
 approved Supabase starter resolves to; keep this pin and do not downgrade to 16.3.4.
+
+`eslint-config-next` is pinned to **16.3.8 to match Next.js 16.3.8** (it must stay on
+the same release as `next`). It ships a native flat config, which `eslint.config.mjs`
+spreads directly — `FlatCompat`/`@eslint/eslintrc` is no longer used.
+
+## Tailwind CSS 4
+
+Styling runs on **Tailwind CSS 4.3.3** with `@tailwindcss/postcss` (PostCSS plugin).
+The migration replaced the v3 trio (`tailwindcss` + `autoprefixer` + `tailwind.config.ts`):
+
+- `postcss.config.mjs` uses `@tailwindcss/postcss` only; `autoprefixer` was removed
+  (Tailwind 4 emits vendor prefixes itself).
+- `app/globals.css` is CSS-first: `@import "tailwindcss"`, `@plugin "tailwindcss-animate"`,
+  `@custom-variant dark` for the class-based dark mode, and `@theme inline` for the
+  shadcn colour/radius tokens (the `--radius-*` and `hsl(var(--*))` values match the
+  old JS config).
+- `tailwind.config.ts` was deleted; source detection is automatic.
+- Class renames for v4: `shadow` → `shadow-sm`, `shadow-sm` → `shadow-xs`,
+  `outline-none` → `outline-hidden`, `bg-gradient-*` → `bg-linear-*`, and the removed
+  `origin-[--var]` shorthand → `origin-[var(--var)]`.
+
+## npm audit
+
+`npm audit --omit=dev` (production dependencies): **0 vulnerabilities**.
+
+`npm audit` (all dependencies): **5 high**, all in the dev toolchain and all one chain
+rooted in a single advisory:
+
+| Advisory | Package | Range |
+| --- | --- | --- |
+| [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) — stack-exhaustion DoS via deeply nested patterns (high) | `braces` | `<=3.0.3` |
+
+Propagation: `braces` ← `micromatch` ← `fast-glob` ← `@next/eslint-plugin-next@16.3.8`
+← `eslint-config-next@16.3.8`.
+
+`braces@3.0.3` is the newest release on npm, so **no fixed version exists yet**; npm's
+only suggested resolution is a downgrade of `eslint-config-next` to 14.2.35, which is
+rejected. Nothing is suppressed and `--force` / `--legacy-peer-deps` are not used.
+Re-check `npm audit` on every dependency update: the count fell from 7 to 5 with the
+Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `braces` path).
 
 ## Testing
 
