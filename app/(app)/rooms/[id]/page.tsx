@@ -1,10 +1,13 @@
 import { FocusTimer } from "@/components/focus-timer";
 import { GoalsPanel } from "@/components/goals-panel";
+import { RoomChat } from "@/components/room-chat";
 import { Badge } from "@/components/ui/badge";
+import { listMessages } from "@/lib/chat/queries";
 import { FocusSessionError } from "@/lib/focus/sessions";
 import { getFocusWorkspace } from "@/lib/focus/workspace";
 import { listGoals } from "@/lib/goals/queries";
 import { createClient } from "@/lib/supabase/server";
+import { MESSAGE_PAGE_SIZE_DEFAULT } from "@/lib/validation/chat";
 import { roomIdSchema } from "@/lib/validation/rooms";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
@@ -21,8 +24,8 @@ type RoomPageProps = {
 };
 
 /**
- * The shared study workspace: focus timer, the viewer's own goals and recent
- * sessions for a room.
+ * The shared study workspace: focus timer, the viewer's own goals, the room
+ * chat, and recent sessions for a room.
  *
  * Membership is decided by the workspace read itself — a non-member and a
  * missing room both land on the same 404, so the URL never reveals which
@@ -32,8 +35,9 @@ type RoomPageProps = {
 export default async function RoomWorkspacePage({ params }: RoomPageProps) {
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
+  const viewerId = data?.claims?.sub;
 
-  if (!data?.claims) {
+  if (!viewerId) {
     redirect("/auth/login");
   }
 
@@ -54,6 +58,11 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
   }
 
   const goals = await listGoals(supabase, parsedRoomId.data);
+  const { messages } = await listMessages(supabase, {
+    roomId: parsedRoomId.data,
+    viewerId,
+    limit: MESSAGE_PAGE_SIZE_DEFAULT,
+  });
   const { room, member_count, viewer_role } = workspace;
 
   return (
@@ -100,6 +109,10 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
       />
 
       <GoalsPanel roomId={room.id} initialGoals={goals} />
+
+      {/* Keyed per room so a room switch cannot show the previous room's
+          messages or connection badge while the new channel joins. */}
+      <RoomChat key={room.id} roomId={room.id} initialMessages={messages} />
     </section>
   );
 }

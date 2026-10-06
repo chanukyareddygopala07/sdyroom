@@ -1,13 +1,12 @@
 /**
- * Client-side shapes for room chat and presence.
+ * Shared shapes for room chat and presence.
  *
- * The backend for chat is owned by a separate developer and is not merged
- * yet, so this module is a *proposal*: it fixes the view types the UI is
- * built and tested against, and the endpoints that would populate them are
- * written down in the pull request description. Nothing in the app fetches
- * or fabricates this data until the agreed contract lands — the panel is
- * rendered from props only, so every state below can be exercised by tests
- * without a server.
+ * The view types here are the contract between the props-driven
+ * {@link ChatPanel} and its data layer: history is read with the workspace
+ * page (`GET /api/rooms/[id]/messages`), `RoomChat` sends new messages over
+ * the same endpoint and maps Realtime rows onto this shape, and the panel
+ * renders without ever fetching. Participant presence remains a proposal —
+ * the panel hides that section until a contract supplies it.
  */
 
 /** Delivery state of one message as the viewer sees it. */
@@ -36,7 +35,7 @@ export type ChatMessageView = {
   is_own: boolean;
 };
 
-/** A participant reported by the approved presence contract, if any. */
+/** Proposed participant shape; only rendered once presence is contracted. */
 export type ChatParticipant = {
   alias: string;
 };
@@ -52,5 +51,5 @@ export type ChatConnectionState =
   | "reconnecting"
   | "unavailable";
 
-/** Proposed maximum message length; the API must validate the same bound. */
+/** Maximum message length, enforced by the API and the composer alike. */
 export const CHAT_MESSAGE_MAX_LENGTH = 2000;

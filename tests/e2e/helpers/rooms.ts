@@ -83,6 +83,15 @@ export function goalsPanel(page: Page) {
   return page.getByRole("region", { name: "My goals in this room" });
 }
 
+export function chatPanel(page: Page) {
+  return page.getByRole("region", { name: "Chat" });
+}
+
+/** The chat channel indicator: Connecting… / Live / Reconnecting…. */
+export function chatStatus(page: Page) {
+  return chatPanel(page).getByRole("status");
+}
+
 /** The realtime subscription indicator: Connecting… / Live / Reconnecting…. */
 export function syncStatus(page: Page) {
   return focusTimer(page).getByRole("status");

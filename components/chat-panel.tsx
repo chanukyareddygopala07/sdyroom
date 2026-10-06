@@ -37,11 +37,11 @@ function formatTime(value: string): string | null {
  *
  * Deliberately props-driven — it renders `messages`, `participants` and the
  * `connection` state it is given and reports intent through `onSend` /
- * `onRetrySend` / `onRetryLoad`. The data layer (REST history, Realtime
- * updates, presence) arrives with the backend contract in a follow-up, so
- * this component never fetches and can never pretend a send succeeded: a
- * failed message stays on screen with its retry control until the owner of
- * the state says otherwise.
+ * `onRetrySend` / `onRetryLoad`. Its data layer (`RoomChat`: server-seeded
+ * history, Realtime updates, REST sends) lives in that wrapper, so this
+ * component never fetches and can never pretend a send succeeded: a failed
+ * message stays on screen with its retry control until the owner of the
+ * state says otherwise.
  *
  * Scroll rule: new messages only move the viewport when the reader is
  * already near the bottom; otherwise their position is kept and a "New
