@@ -9,7 +9,8 @@ Working log: what has landed, what each milestone still owes.
 | C — local Supabase stack: `profiles`, `rooms`, `room_members`, RLS, `create_room` | `86a6806` | done |
 | D — minimal working application | `b55bff1` | done |
 | E — automated integration tests and CI | `24ba4c2` | done |
-| F — public room joining and capacity enforcement | this change | done |
+| F — public room joining and capacity enforcement | `f6c6411` | done |
+| G — shared study workspace, synchronized focus timers and personal goals | this change | done |
 
 ## Milestone D — task breakdown
 
@@ -149,11 +150,81 @@ Working log: what has landed, what each milestone still owes.
       direct-write test fail, restored with `npx supabase db reset` and re-verified
       green. Database left with `profiles=0 rooms=0 members=0 users=0`.
 
+## Milestone G — task breakdown
+
+- [x] Preflight — clean tree at `f6c6411`, local stack healthy and still unlinked,
+      migration list empty apart from `0001`/`0002`, `supabase_realtime` publication
+      present but empty, and CI reviewed as the gate the push must survive.
+- [x] `supabase/migrations/0003_focus_sessions_and_goals.sql` — `focus_sessions`
+      (state machine `running|paused|completed|expired` with CHECKs pairing
+      `paused ⇔ paused_at` and `terminal ⇔ ended_at`), the partial unique index
+      `focus_sessions_one_active`, `study_goals` (personal, CHECK
+      `(status='completed') = (completed_at is not null)`, partial unique active-title
+      index on `(user_id, room_id, lower(title))`), the `study_goals_touch` trigger
+      (owns `updated_at`/`completed_at`), explicit revokes of the stack's default ACL
+      followed by SELECT-only / column-scoped grants, four RLS policies, and five
+      `SECURITY DEFINER` RPCs (`focus_room_check`, `expire_focus_sessions_for`,
+      `focus_session_state`, `start/pause/resume/end_focus_session`) with execution
+      revoked from `public`/`anon` and granted only to `authenticated`.
+      `focus_sessions` joins `supabase_realtime`; `started_by` was dropped entirely —
+      with no column-level `SELECT` grants, any column would leak through raw
+      PostgREST — and `session_expired` was folded into `no_active_session` because
+      every path persists expiry before answering. Verified 99/99 with a throwaway
+      harness (grants, prosecdef, races, forced expiry, privacy) after `db reset`.
+- [x] Lib layer — `lib/focus/` (`readFocusState` / four action RPCs, `FocusSessionError`
+      codes `not_found` 404 / `not_owner` 403 / `no_active_session`·`invalid_state` 409
+      / `invalid` 400, strict `toFocusSession()` that re-checks the DB invariants and
+      copies exactly nine columns) and `getFocusWorkspace()` (state → parallel room and
+      history reads); `lib/goals/` (`listGoals`/`createGoal`/`updateGoal`/`deleteGoal`
+      with `GoalError` and `duplicate_goal` from `23505`); `lib/rooms/access.ts`
+      (`requireRoomMembership` → one 404 for non-member and missing room);
+      `lib/validation/focus.ts` and `goals.ts` (`.strict()` bodies, duration 60–7200 s,
+      title 1–120 chars trimmed, count 1–10000).
+- [x] API — `GET /api/rooms/[id]/workspace`, `POST /api/rooms/[id]/session/{start,pause,
+      resume,end}`, `GET`/`POST /api/rooms/[id]/goals`, `PATCH`/`DELETE
+      /api/goals/[goalId]`. Identity only ever from the session (`claims.sub` for
+      goals), `z.uuid()` route params before any query, empty-body rules enforced
+      (`pause`/`resume`/`end` reject a body carrying fields with `400
+      invalid_request`, goal `PATCH` rejects an empty one), and one error envelope
+      with the documented code map (`201 started`, `200 already_active/paused/resumed/
+      completed`, `400 validation|invalid_json|invalid|invalid_request`, `401
+      unauthenticated`, `403 not_owner`, `404 not_found`, `409 no_active_session|
+      invalid_state|duplicate_goal`, `500 start_/pause_/resume_/end_/workspace_/goals_/
+      goal_create_/goal_update_/goal_delete_failed`).
+- [x] UI — `/rooms/[id]` workspace page (`instant = false`, auth redirect, `notFound()`
+      on 404, `loading.tsx`, `error.tsx`, root `not-found.tsx`); `FocusTimer` client
+      component: realtime subscription on `focus_sessions` filtered by room, 20 s poll
+      plus focus/visibility re-read as fallback, countdown derived from `server_now_ms`
+      (offset kept in a ref, clock read only from effects/handlers), owner-only
+      presets (25/45/60 min) with Start/Pause/Resume/End, recent-session history and
+      Live/Reconnecting status; `GoalsPanel`: create (minutes → seconds), complete /
+      reopen, delete, client-side range validation, server messages in a `role="alert"`.
+- [x] Tests — 185 new unit tests taking `npm test` from 136 to **321** (focus session
+      mapping/actions/workspace, goals queries, access, both validators, five route
+      files, both components — the timer under fake timers so the countdown, the
+      paused freeze and the server-clock offset are asserted deterministically),
+      plus `tests/integration/focus-sessions.test.ts` (21) and
+      `study-goals.test.ts` (16): non-member/missing-room 404 parity, role and seat
+      counts, the 6-way concurrent start race (1 `started`, 5 `already_active`, one
+      row), pause-credit timing, control refusal matrix, expiry with no browser,
+      direct-write denial, history ordering, goal privacy against the owner, forged
+      identity/room inserts, trigger-owned timestamps and duplicate titles. The
+      integration suite is 67 → **104** tests; `assertSchemaApplied` now also requires
+      the two new tables.
+- [x] Gates — `npm run lint`, `npx tsc --noEmit`, `npm test` (321), `npm run build`
+      (all new routes registered, `/rooms/[id]` as a partial prerender),
+      `npm run test:integration` (104, exit 0), plus two deliberate control violations
+      (adding `UPDATE` on `focus_sessions`, and widening `study_goals_select_own` to
+      `using (true)`) that each make their suite fail, restored byte-for-byte with
+      `npx supabase db reset`, re-verified green, and re-checked with the 99-check
+      harness. Database left with `profiles=0 rooms=0 members=0 sessions=0 goals=0
+      users=0`.
+
 ## Not in this milestone
 
 - **Integration coverage is API- and RLS-level.** Pages and the proxy redirect are
-  covered by unit tests, not by a browser against a running server; see the coverage
-  gaps section of `tests/integration/README.md`.
+  covered by unit tests, not by a browser against a running server; the realtime
+  subscription path is unit-tested with a mocked channel, not against a live socket.
 - **No member lists, invites or private-room joining.** Only the caller learns their
   own membership, and a private room stays invisible to the public join endpoint;
   sharing an invite to a private room is not built.
@@ -161,4 +232,6 @@ Working log: what has landed, what each milestone still owes.
   can be created, discovered, joined and left — but not renamed, closed from the UI,
   or removed.
 - **No alias editing.** Changing the study alias after onboarding is not built.
-- **No chat, presence or timers.** Joining establishes the seat only.
+- **No chat, presence or file sharing.** The workspace is the shared timer, the
+  session history and each member's own goals; goals are personal by design and are
+  not part of the realtime publication.

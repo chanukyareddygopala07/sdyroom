@@ -63,6 +63,8 @@ remote or production project.
 | `membership-and-rls.test.ts` | Grants and policies per role: `anon` and `authenticated` privilege denials, private-room and membership visibility, membership insert rules, profile update isolation |
 | `atomic-room-creation.test.ts` | Owner membership committed with the room, `23514` rollback for a room without it, the revoked-grant transaction, `22023` validation inside the RPC, and that no owner argument exists to spoof |
 | `room-membership.test.ts` | `join_room` / `leave_room` end to end: `401` guards, non-UUID and body-field rejection, `201`/`200` outcomes, private room indistinguishable from a missing one, `409` closed / full / owner-cannot-leave / not-a-member, leave-and-rejoin, a five-way race for three free seats, the four direct-write bypass attempts, and the public-only occupancy payload |
+| `focus-sessions.test.ts` | The shared timer end to end: `401`/`404`/`403` guards, `400` duration validation, `201 started` / `200 already_active`, a six-way concurrent start race resolving to one row, direct `INSERT`/`UPDATE` denial with member `SELECT` visibility, pause-credit timing on resume, the control refusal matrix (`no_active_session`, `invalid_state`, field-carrying bodies), early completion into history, history ordering, and expiry persisted by the first reader with no browser open |
+| `study-goals.test.ts` | Personal goals end to end: `401`/`404` guards, strict body validation, privacy against the room owner, `409 duplicate_goal` with title reuse after completion, trigger-owned `completed_at`, cross-member `404`s, and the direct-write attempts (forged `user_id`, unjoined room, `user_id`/`room_id` updates, anonymous) |
 
 ### How fixtures are made
 
@@ -70,6 +72,13 @@ remote or production project.
   client bound to that user — never a service-role client.
 - Rooms are created only through the **production `create_room` RPC**, either via
   `lib/rooms/create.ts` or `POST /api/rooms`. No test inserts a room row directly.
+- Focus sessions are created only through `start_focus_session`, invoked via the
+  production route handler. The single exception is simulating the passage of time:
+  an admin `psql` statement backdates `started_at`/`ends_at` on an existing row to
+  prove expiry is persisted by the next reader (no test ever starts a session by
+  inserting a row).
+- Goals are created only through `POST /api/rooms/[id]/goals`; direct inserts appear
+  solely as denial attempts that must fail.
 - Profiles are created through `lib/profiles/queries.ts`.
 - Aliases, emails and room names carry a per-process id, so files cannot collide.
 
@@ -86,7 +95,8 @@ is needed locally or in CI.
 ### Cleanup
 
 Every test file deletes exactly the auth users it created, by id, in `afterAll`.
-`on delete cascade` removes their profiles, rooms and memberships and nothing else.
+`on delete cascade` removes their profiles, rooms, memberships, focus sessions and
+goals and nothing else (each file re-asserts its own residue is gone).
 Files run serially (`fileParallelism: false`) because they share one database: an
 assertion about "no rows" must not observe another file's fixtures.
 
@@ -105,7 +115,10 @@ repository secrets.
   by a browser against a running server.
 - `GET /api/rooms` search is asserted through the handler; Postgres `ilike` edge cases
   live in `tests/unit/lib/rooms`.
+- Realtime delivery is unit-tested with a mocked channel (`tests/unit/components/
+  focus-timer.test.tsx`); no suite opens a live websocket, and the 20-second poll is
+  the covered fallback path.
 - There is no load or migration-rollback testing. Seat-capacity contention is covered
-  by the five-way race in `room-membership.test.ts`, which asserts the final row count
-  never exceeds `capacity`.
+  by the five-way race in `room-membership.test.ts`, and the one-active-session rule by
+  the six-way race in `focus-sessions.test.ts`, both asserting the final row count.
 - `service_role` behaviour is deliberately untested: nothing in the product uses it.

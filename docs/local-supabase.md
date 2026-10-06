@@ -65,33 +65,49 @@ must not be disabled outside local development.
 `supabase/migrations/0001_init.sql` creates three tables, all with RLS enabled.
 `supabase/migrations/0002_room_membership.sql` adds only functions — `join_room`,
 `leave_room` and `public_room_member_counts` — and changes no table, grant or policy.
+`supabase/migrations/0003_focus_sessions_and_goals.sql` adds the shared focus timer
+and personal goals: two tables, five RPCs, a trigger and the realtime publication.
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
 | `profiles` | `id` → `auth.users`, `alias`, `exam_targets`, `created_at` | No email, no auth metadata, no other PII. `alias` 1–32 chars, trimmed, unique on `lower(alias)` (case-insensitive, no `citext`). `exam_targets` is a `jsonb` array, default `'[]'`. |
 | `rooms` | `id`, `owner_id` → `auth.users`, `visibility`, `name`, `capacity`, `exam_track`, `subject`, `language`, `status`, `shared_goal`, `created_at`, `updated_at` | `visibility` ∈ `public`/`private`; `status` ∈ `open`/`closed` (default `open`); `capacity` 1–100 (default 4); name 1–100 chars trimmed. Partial index on public rooms by `created_at desc`. |
 | `room_members` | PK `(room_id, user_id)`, `role`, `joined_at` | `role` ∈ `owner`/`student` (default `student`). `room_id` and `user_id` both `ON DELETE CASCADE`. Index on `user_id`. |
+| `focus_sessions` | `id`, `room_id` → `rooms`, `state`, `duration_seconds`, `started_at`, `ends_at`, `paused_at`, `paused_seconds`, `ended_at` | `state` ∈ `running`/`paused`/`completed`/`expired`. Partial unique index `focus_sessions_one_active (room_id) where state in ('running','paused')` — at most one active session per room, concurrency-safe. CHECKs pair `paused ⇔ paused_at` and `terminal ⇔ ended_at`, and require `ends_at > started_at`. Selected by `authenticated` only; every write goes through the RPCs. |
+| `study_goals` | `id`, `user_id` → `auth.users`, `room_id` → `rooms`, `title`, `target_seconds`, `target_count`, `status`, `completed_at`, `created_at`, `updated_at` | Personal rows: `status` ∈ `active`/`completed`, `completed_at` set and cleared by the `study_goals_touch` trigger (never accepted from a client), CHECK `(status = 'completed') = (completed_at is not null)`. Partial unique index on `(user_id, room_id, lower(title)) where status = 'active'` — one active goal per title, reusable once completed. `user_id`/`room_id` cascade on delete. |
 
 No sample rooms and no fabricated auth users are inserted by SQL: `supabase/seed.sql`
 is intentionally empty, and local test data is made only through the Auth API and the
 `create_room` / `join_room` RPCs.
+
+`focus_sessions` is added to the `supabase_realtime` publication, so members' clients
+receive `postgres_changes` events for their room's session and re-read the workspace;
+`study_goals` is deliberately not published (goals refetch, they are never pushed).
 
 ## Grants
 
 Grants are explicit and column-aware (`auto_expose_new_tables = false` in
 `config.toml`, so new tables receive no default API-role grants):
 
-| Grantee | `profiles` | `rooms` | `room_members` |
-| --- | --- | --- | --- |
-| `anon` | none | none | none |
-| `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` |
-| `service_role` | no data privileges | no data privileges | no data privileges |
+| Grantee | `profiles` | `rooms` | `room_members` | `focus_sessions` | `study_goals` |
+| --- | --- | --- | --- | --- | --- |
+| `anon` | none | none | none | none | none |
+| `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` | `SELECT` | `SELECT`, `INSERT`, `DELETE`, `UPDATE (title, target_seconds, target_count, status)` |
+| `service_role` | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges |
 
 **No `UPDATE` or `DELETE` on `rooms` / `room_members`** — those flows are deliberately
 undeveloped. `authenticated` has no table-level `SELECT` on `profiles` by design: only
 the approved columns are granted, so application queries must list columns explicitly
 (`select id, alias, ...`); never rely on `SELECT *` for profile responses. When a new
 column is added to `profiles`, grant it only after it is approved.
+
+The same shape repeats in `0003`: `focus_sessions` is **read-only** for clients (a
+direct `INSERT`/`UPDATE` cannot start a session or rewind a deadline — only the
+`SECURITY DEFINER` RPCs write), and `study_goals` gets a **column-scoped** `UPDATE`,
+so `user_id`, `room_id`, `completed_at`, `created_at` and `updated_at` are not
+addressable at all. The stack also defines a default ACL that would give these roles
+`TRUNCATE`/`REFERENCES`/`TRIGGER`/`MAINTAIN` on new public tables, so `0003` starts by
+revoking everything from `anon`, `authenticated` and `service_role` before granting.
 
 ## Row Level Security
 
@@ -104,6 +120,8 @@ column is added to `profiles`, grant it only after it is approved.
 | `rooms` | `rooms_insert_self_owner` | `owner_id = auth.uid()` — impersonation impossible |
 | `room_members` | `room_members_select_own` | `user_id = auth.uid()` — no other member's rows leak |
 | `room_members` | `room_members_insert_owner_self` | only the room owner, about themselves, as `owner` |
+| `focus_sessions` | `focus_sessions_select_member` | members of the room only; there is no insert/update/delete policy, so RLS denies them even if a grant ever appeared |
+| `study_goals` | `study_goals_select_own` / `insert_own` / `update_own` / `delete_own` | `user_id = auth.uid()` only; the insert policy also requires membership of the goal's room, so a goal cannot be attached to a room the writer has not joined |
 
 There are **no policies for `anon` on any table** (verified: 0 policies for roles other
 than `authenticated`), and anon holds no table privileges either.
@@ -167,14 +185,45 @@ membership path in the product, and they were necessary because the grants above
 No table grant or policy changed, so direct PostgREST writes keep failing exactly as
 before: `INSERT` hits RLS with `42501`, `DELETE` hits the missing grant with `42501`.
 
+## Focus session and goal functions (`0003_focus_sessions_and_goals.sql`)
+
+Five functions, all `SECURITY DEFINER` with `set search_path = ''`, schema-qualified
+references, `auth.uid()` read and null-checked first, execution revoked from `public`
+and `anon` and granted only to `authenticated` — the same constraints as `0002`.
+
+| Function | Behaviour |
+| --- | --- |
+| `focus_room_check(p_room_id uuid, p_require_owner boolean) → text` | The single authorization helper: missing room or non-member → `room_not_found` (so a non-member cannot tell a private room from a missing one), and with `p_require_owner` a student → `not_owner`. Returns a code, never a row, so it cannot leak room data. **Revoked from every app role** — only the other functions may execute it. |
+| `expire_focus_sessions_for(p_room_id uuid) → void` | Persists `state = 'expired', ended_at = ends_at` for rows whose deadline passed. Also revoked from every app role; called by the read and the RPCs, never by a client. |
+| `focus_session_state(p_room_id uuid) → jsonb` | The read path: membership check, expiry pass, then `{ code: 'ok', session, viewer_role, member_count, server_now_ms }` where `session` is the active row or `null`, `server_now_ms` is the database clock in epoch milliseconds, and `member_count` comes from a definer read so students see seat usage without being able to enumerate `room_members`. |
+| `start_focus_session(p_room_id uuid, p_duration_seconds integer) → jsonb` | Owner only. Validates 60–7200 s (`22023` otherwise), expires stale sessions first, then inserts with `started_at`/`ends_at` from `now()`. A concurrent loser blocks on `focus_sessions_one_active`, gets `23505`, and is handed the winning row as `already_active` — never a second row. |
+| `pause_focus_session` / `resume_focus_session` / `end_focus_session` | Owner only. Pause records `paused_at` (the deadline does not move); resume credits the paused interval to `ends_at` and accumulates `paused_seconds`; end flips to `completed` with `ended_at = now()`. Each returns the code plus the row, or `no_active_session` / `invalid_state` (409) / `not_owner` (403) / `room_not_found` (404). |
+
+Two deliberate refinements over the original design notes:
+
+- **No `session_expired` result code.** Every read and every control persists expiry
+  first, so a passed deadline surfaces as `no_active_session` (409) instead of a
+  separate code — one fewer branch for clients to handle, and the state is always
+  already written.
+- **No `started_by` column.** Column-level `SELECT` grants do not exist in Postgres,
+  so any column would be readable through raw PostgREST by anyone who can `SELECT`.
+  Exposing "who started" would therefore require a policy that hides it from some
+  members but not others; the column was dropped and the API carries no starter
+  identity at all.
+
+Goals need no RPC: `study_goals` is written through PostgREST, where the
+column-scoped grants and `user_id = auth.uid()` policies are the whole security
+model, and the `study_goals_touch` trigger owns `updated_at`/`completed_at` on every
+update regardless of the writer.
+
 ## Verification performed
 
 All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001_init.sql, 0002_room_membership.sql
-npx supabase migration list --local # 0001 and 0002 present locally
+npx supabase db reset               # exit 0: applied 0001_init.sql, 0002_room_membership.sql, 0003_focus_sessions_and_goals.sql
+npx supabase migration list --local # 0001, 0002 and 0003 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
@@ -222,6 +271,29 @@ auth users and covered end to end by `tests/integration/room-membership.test.ts`
 | Five concurrent joins for three free seats | 3 `joined`, 2 `room_full`, final row count exactly 4 |
 | Direct `INSERT` / `DELETE` on `room_members` | both denied (`42501`) — the grants did not move |
 | Occupancy | `room_id` + `member_count` only, public rooms only, private room absent |
+
+Focus sessions and goals (`0003_focus_sessions_and_goals.sql`), verified against the
+local stack with a throwaway harness (99 checks: SQL grants/policies plus RPC calls
+through real authenticated users) and covered end to end by
+`tests/integration/focus-sessions.test.ts` and `tests/integration/study-goals.test.ts`:
+
+| Requirement | Result |
+| --- | --- |
+| Grants | `focus_sessions`: anon `f`, `authenticated` SELECT only, `service_role` none (default ACL explicitly revoked first). `study_goals`: select/insert/delete + `UPDATE (title, target_seconds, target_count, status)` |
+| RPC execution | all five: anon `f`, authenticated `t`, `search_path = ""`, `prosecdef = t`; `focus_room_check` and `expire_focus_sessions_for` not executable by any app role |
+| Realtime | `focus_sessions` in `supabase_realtime`; `study_goals` not published |
+| Authorization | non-member and missing room → identical `room_not_found`; student control → `not_owner`; member view → `ok` with their own `viewer_role` |
+| Start / repeat start | `started` (201) then `already_active` (200), same row, one active row per room |
+| Eight concurrent starts | 1 `started`, 7 `already_active`, exactly 1 row (partial unique index) |
+| Pause / resume timing | `ends_at` unchanged by pause; resume credits the paused interval (`ends_at` moves forward, `paused_seconds` grows) |
+| Early end | `completed` with `ended_at = now()`, history lists it newest-first |
+| Expiry with no browser | backdated `ends_at` → next read or start persists `expired` with `ended_at = ends_at`; `pause` answers `no_active_session`; the stale row never blocks a new start |
+| Direct writes | authenticated `INSERT`/`UPDATE` on `focus_sessions` → `42501` (SELECT-only grant); members can `SELECT`, non-members see 0 rows |
+| Goals privacy | each caller reads only `user_id = auth.uid()` rows — even the room owner sees an empty list for someone else's goals |
+| Goals ownership | another member's `PATCH`/`DELETE` → `404`, zero rows touched; forged `user_id` on insert → `42501`; insert into an unjoined room → `42501`; `user_id`/`room_id` updates → `42501` |
+| Goals uniqueness | duplicate active title (case-insensitive) → `23505` → `409 duplicate_goal`; after completion the same title is accepted |
+| Goals timestamps | completing sets `completed_at`, reopening clears it, direct writes cannot backdate either (`study_goals_touch` trigger) |
+| Cleanup | harness leaves `profiles=0 rooms=0 sessions=0 goals=0 users=0` |
 
 ## Notes and risks
 

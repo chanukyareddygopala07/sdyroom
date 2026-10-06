@@ -7,11 +7,19 @@ export type FakeResult = {
 
 export type FakeBuilder = ReturnType<typeof createFakeBuilder>;
 
+type FakeResultOrNext = FakeResult | (() => FakeResult);
+
 /**
  * Minimal stand-in for a PostgREST builder: every chainable call is recorded
  * and `await builder` resolves to `{ data, error }`.
+ *
+ * The result may be a function, which is called at each await — that is how a
+ * client with several sequential queries (RPC first, then two tables) is
+ * faked with a queue of results.
  */
-export function createFakeBuilder(result: FakeResult) {
+export function createFakeBuilder(result: FakeResultOrNext) {
+  const resolve: () => FakeResult =
+    typeof result === "function" ? result : () => result;
   const state = {
     select: [] as string[],
     eq: [] as [string, unknown][],
@@ -61,24 +69,31 @@ export function createFakeBuilder(result: FakeResult) {
       state.deletes += 1;
       return builder;
     }),
-    maybeSingle: vi.fn(async () => result),
+    maybeSingle: vi.fn(async () => resolve()),
+    single: vi.fn(async () => resolve()),
     then: (
       onFulfilled?: (value: unknown) => unknown,
       onRejected?: (reason: unknown) => unknown,
-    ) => Promise.resolve(result).then(onFulfilled, onRejected),
+    ) => Promise.resolve(resolve()).then(onFulfilled, onRejected),
   };
 
   return { builder, state };
 }
 
-export function createFakeClient(result: FakeResult) {
-  const { builder, state } = createFakeBuilder(result);
+/**
+ * A client whose `rpc` and table queries answer from `queue` in call order
+ * (falling back to `result` once the queue is empty), so one test can drive a
+ * read RPC, then a room row, then a history list.
+ */
+export function createFakeClient(result: FakeResult, queue: FakeResult[] = []) {
+  const next = (): FakeResult => queue.shift() ?? result;
+  const { builder, state } = createFakeBuilder(next);
   const rpcCalls: { fn: string; args?: unknown }[] = [];
   const client = {
     from: vi.fn(() => builder),
     rpc: vi.fn(async (fn: string, args?: unknown) => {
       rpcCalls.push({ fn, args });
-      return result;
+      return next();
     }),
     rpcCalls,
     auth: {

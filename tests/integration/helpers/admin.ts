@@ -78,12 +78,15 @@ export function assertSchemaApplied(): void {
   const marker = psql(
     "select to_regclass('public.profiles') is not null " +
       "and to_regclass('public.rooms') is not null " +
-      "and to_regclass('public.room_members') is not null;",
+      "and to_regclass('public.room_members') is not null " +
+      "and to_regclass('public.focus_sessions') is not null " +
+      "and to_regclass('public.study_goals') is not null;",
   );
   if (marker !== "t") {
     throw new Error(
-      "The public.profiles / public.rooms / public.room_members tables are " +
-        'missing. Apply the migrations with "npx supabase db reset".',
+      "The public.profiles / public.rooms / public.room_members / " +
+        'public.focus_sessions / public.study_goals tables are missing. ' +
+        'Apply the migrations with "npx supabase db reset".',
     );
   }
 }

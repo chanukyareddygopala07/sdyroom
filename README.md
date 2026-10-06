@@ -85,9 +85,10 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**` — 42 tests covering auth at the API boundary, onboarding
-  and response privacy, RLS/grant behaviour per role, and `create_room` atomicity
-  (including the revoked-grant rollback). It needs the local stack
+  over `tests/integration/**` — 104 tests covering auth at the API boundary, onboarding
+  and response privacy, RLS/grant behaviour per role, `create_room` atomicity
+  (including the revoked-grant rollback), joining and capacity races, the shared focus
+  timer state machine and personal-goal privacy. It needs the local stack
   (`npx supabase start && npx supabase db reset`) and never uses a service-role key.
   `passWithNoTests` stays unset, so a missing suite still exits non-zero.
   See `tests/integration/README.md`.
@@ -123,12 +124,30 @@ unique study alias once, then discover public rooms and create your own.
 | `POST /api/rooms` | signed in, alias chosen | `401` / `400 validation` / `403 onboarding_required` / `201` |
 | `POST /api/rooms/[id]/join` | signed in | `201 joined` / `200 already_member`; `404 not_found` for a missing or private room, `409 room_closed` / `room_full`, `400` for a non-UUID id or any field in the body |
 | `POST /api/rooms/[id]/leave` | signed in | `200 left`; `404 not_found`, `409 owner_cannot_leave` / `not_a_member`, `400` as above |
+| `/rooms/[id]` | signed in, member | The study workspace: shared focus timer, recent sessions and the caller's own goals |
+| `GET /api/rooms/[id]/workspace` | signed in, member | `{ room, session, viewer_role, server_now_ms, member_count, history }`; `404 not_found` for a non-member *and* a missing room (indistinguishable) |
+| `POST /api/rooms/[id]/session/start` | room owner | `201 started` / `200 already_active` (one active session per room, races included); `403 not_owner`, `404 not_found`, `400 validation` for a duration outside 60–7200 s |
+| `POST /api/rooms/[id]/session/pause` / `resume` / `end` | room owner | `200 paused` / `resumed` / `completed`; `409 no_active_session` / `invalid_state`, `403 not_owner`, `400 invalid_request` for a body carrying fields |
+| `GET /api/rooms/[id]/goals` | signed in, member | The caller's own goals in that room — never another member's; `404 not_found` for a non-member |
+| `POST /api/rooms/[id]/goals` | signed in, member | `201 { goal }`; `409 duplicate_goal` while an active goal with the same title exists |
+| `PATCH` / `DELETE /api/goals/[goalId]` | goal owner | `200 { goal }` / `200 { deleted: true }`; `404 not_found` for anyone else's goal, `400 invalid_request` for an empty `PATCH` |
 
 Both membership endpoints take an empty body on purpose: the user is read from the
 session, and a body that carries a `user_id` is rejected with `400 invalid_request`
 instead of being quietly ignored. Success bodies are
 `{ "membership": "...", "member_count": n }`, where `member_count` is the aggregate
 seat usage for a public room and `null` for a private one.
+
+Focus sessions and goals follow the same rule. The timer is a state machine owned by
+PostgreSQL (`running → paused → running`, ending as `completed` when the owner stops
+early or `expired` when the deadline passes — expiry is persisted by the next read or
+start, so nobody's browser has to stay open). Every timestamp comes from the database,
+the countdown is derived from `server_now_ms`, and `focus_sessions` is `SELECT`-only
+for clients: starting, pausing, resuming and ending go through owner-only `SECURITY
+DEFINER` RPCs, so a direct `INSERT`/`UPDATE` cannot start a session or rewind a
+deadline. Goals are personal — RLS narrows `study_goals` to `user_id = auth.uid()`,
+so even the room owner cannot read anyone else's titles, and `completed_at` is written
+by a trigger rather than accepted from a client.
 
 How the pieces fit together:
 
@@ -150,6 +169,19 @@ How the pieces fit together:
   lock with the insert so racing students cannot exceed `capacity`. Occupancy is an
   aggregate over public rooms only (`public_room_member_counts`), so no participant
   identity or private-room count is ever disclosed.
+- **Focus sessions**: `lib/focus/` reads through `focus_session_state` and writes
+  through `start` / `pause` / `resume` / `end`, all owner-checked inside the
+  database. A partial unique index allows at most one active session per room, so a
+  concurrent race resolves to `already_active` instead of a second row, and
+  `toFocusSession()` re-validates every payload (paused ⇔ `paused_at`, finished ⇔
+  `ended_at`) before it reaches a client. The workspace page subscribes to realtime
+  changes on `focus_sessions`, polls as a fallback and re-reads the same
+  `getFocusWorkspace` the server rendered with, so a reconnect can never restart or
+  rewind a timer.
+- **Personal goals**: `lib/goals/` addresses only the caller's own rows; the partial
+  unique index on `(user_id, room_id, lower(title)) where status = 'active'` yields
+  `409 duplicate_goal`, the title frees up on completion, and a trigger owns
+  `completed_at` / `updated_at`.
 - **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
   } }`, built by `lib/api/responses.ts`.
 
