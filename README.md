@@ -85,9 +85,18 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**`. The suite is still empty, so this command exits
-  non-zero — that is deliberate, so missing integration tests cannot silently pass.
+  over `tests/integration/**` — 42 tests covering auth at the API boundary, onboarding
+  and response privacy, RLS/grant behaviour per role, and `create_room` atomicity
+  (including the revoked-grant rollback). It needs the local stack
+  (`npx supabase start && npx supabase db reset`) and never uses a service-role key.
+  `passWithNoTests` stays unset, so a missing suite still exits non-zero.
   See `tests/integration/README.md`.
+- `.github/workflows/ci.yml` runs both suites on every push and pull request: a
+  `quality` job (lint, types, unit tests, build — no env or secrets) and an
+  `integration` job that stands up an isolated local Supabase, applies migrations from
+  scratch and runs the integration suite. Both jobs use the Node version pinned in
+  `.nvmrc`, and the workflow is `permissions: contents: read` with no repository
+  secrets.
 
 ## Local Supabase
 

@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only by default: this workflow never pushes, never writes packages and
+# never needs a token beyond checking out the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, types, unit tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test
+
+      # No environment variables on purpose: the build must not depend on a
+      # reachable Supabase project, and no secrets exist in this repository.
+      - name: Build
+        run: npm run build
+
+  integration:
+    name: Integration tests (local Supabase)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: quality
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Uses the pinned supabase CLI from devDependencies (2.119.0), so the
+      # stack version matches local development exactly.
+      - name: Start local Supabase
+        run: npx supabase start
+
+      - name: Read stack endpoints
+        run: |
+          npx supabase status -o json > /tmp/supabase-status.json
+          API_URL=$(node -p "require('/tmp/supabase-status.json').API_URL")
+          PUBLISHABLE_KEY=$(node -p "require('/tmp/supabase-status.json').PUBLISHABLE_KEY")
+          echo "::add-mask::$PUBLISHABLE_KEY"
+          echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$PUBLISHABLE_KEY" >> "$GITHUB_ENV"
+
+      - name: Wait for the API to accept requests
+        run: |
+          for attempt in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/health" || true)
+            if [ "$code" = "200" ]; then
+              echo "API ready after $attempt attempt(s)"
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            sleep 2
+          done
+          echo "Supabase API never became ready" >&2
+          exit 1
+
+      - name: Apply migrations from scratch
+        run: npx supabase db reset
+
+      - name: Run integration tests
+        run: npm run test:integration
+
+      - name: Stop local Supabase
+        if: always()
+        run: npx supabase stop --no-backup

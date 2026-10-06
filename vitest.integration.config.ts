@@ -9,8 +9,11 @@ export default defineConfig({
     environment: "node",
     include: ["tests/integration/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/.git/**", "**/.next/**", "**/dist/**"],
-    setupFiles: ["./tests/setup.ts"],
+    setupFiles: ["./tests/integration/setup-env.ts"],
     clearMocks: true,
+    // One local database, shared fixtures and admin SQL: files must not
+    // interleave or an assertion about "no rows" could observe another file.
+    fileParallelism: false,
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },
