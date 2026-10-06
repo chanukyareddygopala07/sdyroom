@@ -11,7 +11,7 @@ Working log: what has landed, what each milestone still owes.
 | E — automated integration tests and CI | `24ba4c2` | done |
 | F — public room joining and capacity enforcement | `f6c6411` | done |
 | G — shared study workspace, synchronized focus timers and personal goals | `1937e16` | done |
-| H — browser end-to-end suite and realtime reliability | this change | done |
+| H — browser end-to-end suite and realtime reliability | `9a98a4a`–`ebcc16e` | done |
 
 ## Milestone D — task breakdown
 
