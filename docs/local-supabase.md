@@ -63,6 +63,8 @@ must not be disabled outside local development.
 ## Schema
 
 `supabase/migrations/0001_init.sql` creates three tables, all with RLS enabled.
+`supabase/migrations/0002_room_membership.sql` adds only functions — `join_room`,
+`leave_room` and `public_room_member_counts` — and changes no table, grant or policy.
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
@@ -70,8 +72,9 @@ must not be disabled outside local development.
 | `rooms` | `id`, `owner_id` → `auth.users`, `visibility`, `name`, `capacity`, `exam_track`, `subject`, `language`, `status`, `shared_goal`, `created_at`, `updated_at` | `visibility` ∈ `public`/`private`; `status` ∈ `open`/`closed` (default `open`); `capacity` 1–100 (default 4); name 1–100 chars trimmed. Partial index on public rooms by `created_at desc`. |
 | `room_members` | PK `(room_id, user_id)`, `role`, `joined_at` | `role` ∈ `owner`/`student` (default `student`). `room_id` and `user_id` both `ON DELETE CASCADE`. Index on `user_id`. |
 
-No sample rooms and no fabricated auth users are inserted by SQL. `supabase/seed.sql`
-does not exist yet, so `db reset` prints a harmless "no files matched pattern" notice.
+No sample rooms and no fabricated auth users are inserted by SQL: `supabase/seed.sql`
+is intentionally empty, and local test data is made only through the Auth API and the
+`create_room` / `join_room` RPCs.
 
 ## Grants
 
@@ -142,14 +145,36 @@ psql session), and raises `23514` unless a `room_members` row exists with
 function is `SECURITY DEFINER` with a pinned empty `search_path` so the check reads
 ground truth instead of the caller's RLS-filtered view.
 
+## Membership functions (`0002_room_membership.sql`)
+
+Three functions, all `SECURITY DEFINER` with `set search_path = ''`, every reference
+schema-qualified, `auth.uid()` read and null-checked before any write, execution
+revoked from `public` and `anon` and granted only to `authenticated`. They are the only
+membership path in the product, and they were necessary because the grants above leave
+`room_members` with `INSERT`+`SELECT` only:
+
+- an RLS `with check` cannot take a row lock, so two students racing for the last seat
+  could each pass a count and then both insert, exceeding `capacity`;
+- the single insert policy lets an *owner* add their own row, so no client can write a
+  `student` membership at all — and there is no `DELETE` grant for leaving.
+
+| Function | Behaviour |
+| --- | --- |
+| `join_room(p_room_id uuid) → jsonb` | Locks the room row (`select … for update`), then: missing/private (non-member) → `room_not_found`; existing member, the owner included → `already_member` with no new row; `status <> 'open'` → `room_closed`; `count >= capacity` → `room_full`; otherwise inserts a `student` row and returns `joined`. `member_count` is the aggregate for public rooms and `null` for private ones. |
+| `leave_room(p_room_id uuid) → jsonb` | Deletes only the caller's own `role = 'student'` row. Non-member of a public room → `not_a_member`, unknown or private room → `room_not_found`, owner → `owner_cannot_leave`, otherwise `left`. Takes no lock: deleting can only free a seat. |
+| `public_room_member_counts() → table(room_id uuid, member_count bigint)` | Aggregate seat usage for `visibility = 'public'` only, so private-room occupancy and every participant identity stay inside the database. |
+
+No table grant or policy changed, so direct PostgREST writes keep failing exactly as
+before: `INSERT` hits RLS with `42501`, `DELETE` hits the missing grant with `42501`.
+
 ## Verification performed
 
 All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001_init.sql
-npx supabase migration list --local # 0001 present locally
+npx supabase db reset               # exit 0: applied 0001_init.sql, 0002_room_membership.sql
+npx supabase migration list --local # 0001 and 0002 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
@@ -179,6 +204,25 @@ Behavioral (29/29 HTTP checks against PostgREST with real local auth users, plus
 | Case-insensitive alias uniqueness | `caseprobe` after `CaseProbe` → `23505 profiles_alias_lower_key` |
 | Input validation | capacity 0 / blank name / bad visibility → `400 / 22023` |
 
+Membership (`0002_room_membership.sql`), verified against the local stack with real
+auth users and covered end to end by `tests/integration/room-membership.test.ts`:
+
+| Requirement | Result |
+| --- | --- |
+| Grants | `join_room`/`leave_room`/`public_room_member_counts`: anon `f`, authenticated `t`, `search_path = ""`, `prosecdef = t` for the two writes |
+| Anonymous execute | all three → HTTP `401` with body `42501` |
+| Join as the second student | `joined`, `member_count = 2` (owner counts as a seat) |
+| Repeat join | `already_member`, row count unchanged, one row per member |
+| Owner joining their own room | `already_member`, no second row |
+| Private / missing room | both → `room_not_found`, byte-identical bodies (no existence leak) |
+| Closed room | `room_closed`; an existing member still gets `already_member` |
+| Capacity | capacity-1 room → `room_full`, count stays 1 |
+| Leaving | `left` with the freed count, rejoin succeeds, repeat leave → `not_a_member` |
+| Owner leaving | `owner_cannot_leave`, row still present |
+| Five concurrent joins for three free seats | 3 `joined`, 2 `room_full`, final row count exactly 4 |
+| Direct `INSERT` / `DELETE` on `room_members` | both denied (`42501`) — the grants did not move |
+| Occupancy | `room_id` + `member_count` only, public rooms only, private room absent |
+
 ## Notes and risks
 
 - Disk is the binding constraint: the local images need several GB. If Docker or the
@@ -186,8 +230,8 @@ Behavioral (29/29 HTTP checks against PostgREST with real local auth users, plus
   (an unrelated `opportunity-bot` stack shares this daemon and must be preserved).
 - `auto_expose_new_tables = false` means future tables are invisible to the API until
   explicitly granted. That is intentional.
-- `service_role` has no data privileges; no server-side code uses it yet.
-- Committed columns, statuses and capacity bounds are defaults, not product decisions —
-  they are not enforced by any UI yet.
-- Comprehensive authenticated API integration tests belong to the next test milestone;
-  this milestone only proves the migration applies and the invariants hold.
+- `service_role` has no data privileges; no server-side code uses it.
+- Room `status` and `capacity` are now enforced by the join flow, but there is still no
+  UI to close or edit a room: `rooms` has no `UPDATE`/`DELETE` grant.
+- Authenticated API behaviour is covered by `tests/integration/` (run it with
+  `npm run test:integration`); the schema itself is proven by `db lint` and `db reset`.

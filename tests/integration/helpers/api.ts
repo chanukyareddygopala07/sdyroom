@@ -20,6 +20,26 @@ export async function callApi(
   handler: (request: NextRequest) => Promise<Response>,
   request: ApiRequest,
 ): Promise<Response> {
+  return handler(toNextRequest(request));
+}
+
+/**
+ * The same seam for dynamic routes, whose handlers also receive a route
+ * context (`{ params }`) — `/api/rooms/[id]/join` and `/leave` resolve their
+ * room id from it.
+ */
+export async function callApiWithParams<C>(
+  handler: (
+    request: NextRequest,
+    context: { params: Promise<C> },
+  ) => Promise<Response>,
+  request: ApiRequest,
+  params: C,
+): Promise<Response> {
+  return handler(toNextRequest(request), { params: Promise.resolve(params) });
+}
+
+function toNextRequest(request: ApiRequest): NextRequest {
   const url = new URL(request.path, "http://127.0.0.1:3000");
   const init: { method: string; headers: Headers; body?: string } = {
     method: request.method ?? "GET",
@@ -31,7 +51,7 @@ export async function callApi(
     init.body = JSON.stringify(request.body);
   }
 
-  return handler(new NextRequest(url, init));
+  return new NextRequest(url, init);
 }
 
 /** Reads a JSON response body as an object, failing loudly if it is not one. */

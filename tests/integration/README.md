@@ -62,6 +62,7 @@ remote or production project.
 | `profiles-and-api-privacy.test.ts` | Onboarding (`201`, idempotent `200`, case-insensitive `409 alias_taken`, `400` validation), room creation (`403` before onboarding, `400` invalid JSON/fields, `201`), discovery filtering and that responses carry no `owner_id` or email |
 | `membership-and-rls.test.ts` | Grants and policies per role: `anon` and `authenticated` privilege denials, private-room and membership visibility, membership insert rules, profile update isolation |
 | `atomic-room-creation.test.ts` | Owner membership committed with the room, `23514` rollback for a room without it, the revoked-grant transaction, `22023` validation inside the RPC, and that no owner argument exists to spoof |
+| `room-membership.test.ts` | `join_room` / `leave_room` end to end: `401` guards, non-UUID and body-field rejection, `201`/`200` outcomes, private room indistinguishable from a missing one, `409` closed / full / owner-cannot-leave / not-a-member, leave-and-rejoin, a five-way race for three free seats, the four direct-write bypass attempts, and the public-only occupancy payload |
 
 ### How fixtures are made
 
@@ -104,5 +105,7 @@ repository secrets.
   by a browser against a running server.
 - `GET /api/rooms` search is asserted through the handler; Postgres `ilike` edge cases
   live in `tests/unit/lib/rooms`.
-- There is no load, concurrency or migration-rollback testing.
+- There is no load or migration-rollback testing. Seat-capacity contention is covered
+  by the five-way race in `room-membership.test.ts`, which asserts the final row count
+  never exceeds `capacity`.
 - `service_role` behaviour is deliberately untested: nothing in the product uses it.

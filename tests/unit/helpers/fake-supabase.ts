@@ -15,6 +15,7 @@ export function createFakeBuilder(result: FakeResult) {
   const state = {
     select: [] as string[],
     eq: [] as [string, unknown][],
+    in: [] as [string, unknown[]][],
     order: [] as [string, Record<string, unknown>][],
     limit: [] as number[],
     or: [] as string[],
@@ -30,6 +31,10 @@ export function createFakeBuilder(result: FakeResult) {
     }),
     eq: vi.fn((column: string, value: unknown) => {
       state.eq.push([column, value]);
+      return builder;
+    }),
+    in: vi.fn((column: string, values: unknown[]) => {
+      state.in.push([column, values]);
       return builder;
     }),
     order: vi.fn((column: string, options: Record<string, unknown>) => {
@@ -68,13 +73,18 @@ export function createFakeBuilder(result: FakeResult) {
 
 export function createFakeClient(result: FakeResult) {
   const { builder, state } = createFakeBuilder(result);
+  const rpcCalls: { fn: string; args?: unknown }[] = [];
   const client = {
     from: vi.fn(() => builder),
-    rpc: vi.fn(async () => result),
+    rpc: vi.fn(async (fn: string, args?: unknown) => {
+      rpcCalls.push({ fn, args });
+      return result;
+    }),
+    rpcCalls,
     auth: {
       getClaims: vi.fn(async () => ({ data: { claims: { sub: "user-1" } } })),
     },
   };
 
-  return { client, builder, state };
+  return { client, builder, state, rpcCalls };
 }

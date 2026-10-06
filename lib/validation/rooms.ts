@@ -60,5 +60,12 @@ export const roomSearchSchema = z.object({
     .default(""),
 });
 
+/**
+ * Dynamic route id for `/api/rooms/[id]/join` and `/leave`. Room ids are
+ * UUIDs, so anything else is a 400 before the request reaches the database.
+ */
+export const roomIdSchema = z.uuid();
+
 export type CreateRoomInput = z.infer<typeof createRoomSchema>;
+
 export type RoomSearchInput = z.infer<typeof roomSearchSchema>;

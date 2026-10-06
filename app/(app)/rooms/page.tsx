@@ -1,7 +1,12 @@
 import { RoomCard } from "@/components/room-card";
 import { RoomSearchForm } from "@/components/room-search-form";
 import { Button } from "@/components/ui/button";
-import { listPublicRooms } from "@/lib/rooms/queries";
+import {
+  listPublicRooms,
+  listViewerMemberships,
+  roomMemberCounts,
+} from "@/lib/rooms/queries";
+import type { RoomSummary } from "@/lib/rooms/types";
 import { createClient } from "@/lib/supabase/server";
 import { roomSearchSchema, type RoomSearchInput } from "@/lib/validation/rooms";
 import Link from "next/link";
@@ -55,14 +60,34 @@ async function RoomsResults({
     );
   }
 
+  // One aggregate query for seat usage plus one own-rows query for the
+  // viewer's memberships; both run without waiting on each other.
+  const [counts, memberships] = await Promise.all([
+    roomMemberCounts(supabase),
+    listViewerMemberships(
+      supabase,
+      rooms.map((room) => room.id),
+    ),
+  ]);
+
+  const summaries: RoomSummary[] = rooms.map((room) => {
+    const role = memberships.get(room.id);
+    return {
+      ...room,
+      member_count: counts.get(room.id) ?? 0,
+      viewer_membership:
+        role === "owner" ? "owner" : role === "student" ? "member" : "none",
+    };
+  });
+
   return (
     <>
       <p className="text-sm text-muted-foreground" role="status">
-        {rooms.length} {rooms.length === 1 ? "room" : "rooms"}
+        {summaries.length} {summaries.length === 1 ? "room" : "rooms"}
         {search.q ? ` matching “${search.q}”` : ""} — public rooms only.
       </p>
       <ul className="grid gap-4 sm:grid-cols-2">
-        {rooms.map((room) => (
+        {summaries.map((room) => (
           <li key={room.id}>
             <RoomCard room={room} />
           </li>

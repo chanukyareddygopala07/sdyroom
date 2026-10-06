@@ -1,6 +1,7 @@
 import {
   CAPACITY_DEFAULT,
   createRoomSchema,
+  roomIdSchema,
   roomSearchSchema,
 } from "@/lib/validation/rooms";
 import { describe, expect, it } from "vitest";
@@ -111,5 +112,19 @@ describe("roomSearchSchema", () => {
     expect(roomSearchSchema.safeParse({ q: "a".repeat(101) }).success).toBe(
       false,
     );
+  });
+});
+
+describe("roomIdSchema", () => {
+  it("accepts a UUID", () => {
+    expect(roomIdSchema.safeParse("11111111-1111-4111-8111-111111111111").success).toBe(
+      true,
+    );
+  });
+
+  it("rejects anything that is not a UUID so bad ids stop at the route", () => {
+    for (const value of ["", "not-a-uuid", "room-1", "1; drop table rooms"]) {
+      expect(roomIdSchema.safeParse(value).success).toBe(false);
+    }
   });
 });

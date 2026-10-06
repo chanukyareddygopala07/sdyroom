@@ -121,6 +121,14 @@ unique study alias once, then discover public rooms and create your own.
 | `GET /api/rooms` | signed in | Shaped public rooms, `401` when unauthenticated |
 | `POST /api/profile` | signed in | Creates the profile row, `409 alias_taken` on a case-insensitive collision |
 | `POST /api/rooms` | signed in, alias chosen | `401` / `400 validation` / `403 onboarding_required` / `201` |
+| `POST /api/rooms/[id]/join` | signed in | `201 joined` / `200 already_member`; `404 not_found` for a missing or private room, `409 room_closed` / `room_full`, `400` for a non-UUID id or any field in the body |
+| `POST /api/rooms/[id]/leave` | signed in | `200 left`; `404 not_found`, `409 owner_cannot_leave` / `not_a_member`, `400` as above |
+
+Both membership endpoints take an empty body on purpose: the user is read from the
+session, and a body that carries a `user_id` is rejected with `400 invalid_request`
+instead of being quietly ignored. Success bodies are
+`{ "membership": "...", "member_count": n }`, where `member_count` is the aggregate
+seat usage for a public room and `null` for a private one.
 
 How the pieces fit together:
 
@@ -136,8 +144,12 @@ How the pieces fit together:
 - **Database access**: `lib/profiles/queries.ts` and `lib/rooms/` — public rooms are
   read with an explicit column list and mapped through `toPublicRoom()`, so
   `owner_id` and any future private column can never reach a response. Rooms are
-  only ever created through the `create_room` RPC; the owner is taken from
-  `auth.uid()` and never accepted from the client.
+  only ever created through the `create_room` RPC, and membership only through
+  `join_room` / `leave_room`: the owner (or the caller) is always taken from
+  `auth.uid()` and never accepted from the client, and the seat check shares a row
+  lock with the insert so racing students cannot exceed `capacity`. Occupancy is an
+  aggregate over public rooms only (`public_room_member_counts`), so no participant
+  identity or private-room count is ever disclosed.
 - **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
   } }`, built by `lib/api/responses.ts`.
 

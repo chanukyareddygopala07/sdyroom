@@ -1,6 +1,8 @@
 import {
   listPublicRooms,
+  listViewerMemberships,
   RoomQueryError,
+  roomMemberCounts,
   toIlikePattern,
 } from "@/lib/rooms/queries";
 import { PUBLIC_ROOM_COLUMNS } from "@/lib/rooms/types";
@@ -93,6 +95,94 @@ describe("listPublicRooms", () => {
     });
 
     await expect(listPublicRooms(client as never, { q: "" })).rejects.toThrow(
+      RoomQueryError,
+    );
+  });
+});
+
+describe("listViewerMemberships", () => {
+  it("reads only room_id and role for the requested rooms", async () => {
+    const { client, state } = createFakeClient({
+      data: [
+        { room_id: "room-1", role: "owner" },
+        { room_id: "room-2", role: "student" },
+      ],
+    });
+
+    const memberships = await listViewerMemberships(client as never, [
+      "room-1",
+      "room-2",
+    ]);
+
+    expect(client.from).toHaveBeenCalledWith("room_members");
+    expect(state.select).toEqual(["room_id, role"]);
+    expect(state.in).toEqual([["room_id", ["room-1", "room-2"]]]);
+    expect(memberships).toEqual(
+      new Map([
+        ["room-1", "owner"],
+        ["room-2", "student"],
+      ]),
+    );
+  });
+
+  it("does not query at all when there is nothing to look up", async () => {
+    const { client } = createFakeClient({ data: [] });
+
+    const memberships = await listViewerMemberships(client as never, []);
+
+    expect(client.from).not.toHaveBeenCalled();
+    expect(memberships.size).toBe(0);
+  });
+
+  it("throws a RoomQueryError when the query fails", async () => {
+    const { client } = createFakeClient({
+      data: null,
+      error: { message: "permission denied" },
+    });
+
+    await expect(
+      listViewerMemberships(client as never, ["room-1"]),
+    ).rejects.toThrow(RoomQueryError);
+  });
+});
+
+describe("roomMemberCounts", () => {
+  it("asks the RPC for aggregate counts and builds a lookup", async () => {
+    const { client, rpcCalls } = createFakeClient({
+      data: [
+        { room_id: "room-1", member_count: 3 },
+        { room_id: "room-2", member_count: 0 },
+      ],
+    });
+
+    const counts = await roomMemberCounts(client as never);
+
+    expect(rpcCalls).toEqual([
+      { fn: "public_room_member_counts", args: undefined },
+    ]);
+    expect(counts).toEqual(
+      new Map([
+        ["room-1", 3],
+        ["room-2", 0],
+      ]),
+    );
+  });
+
+  it("falls back to 0 for a malformed count", async () => {
+    const { client } = createFakeClient({
+      data: [{ room_id: "room-1", member_count: "many" }],
+    });
+
+    expect((await roomMemberCounts(client as never)).get("room-1")).toBe(0);
+  });
+
+  it("throws a RoomQueryError when the RPC fails", async () => {
+    const { client } = createFakeClient({
+      data: null,
+      error: { message: "permission denied" },
+    });
+
+    await expect(roomMemberCounts(client as never)).rejects.toThrow(
       RoomQueryError,
     );
   });
