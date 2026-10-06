@@ -1,6 +1,8 @@
 import { RoomMembershipButton } from "@/components/room-membership-button";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import type { RoomSummary } from "@/lib/rooms/types";
+import Link from "next/link";
 
 const dateFormat = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
@@ -51,6 +53,12 @@ export function RoomCard({ room }: { room: RoomSummary }) {
             <time dateTime={room.created_at}>{`Created ${created}`}</time>
           )}
         </div>
+
+        {room.viewer_membership !== "none" && (
+          <Button asChild size="sm" variant="secondary">
+            <Link href={`/rooms/${room.id}`}>Enter room</Link>
+          </Button>
+        )}
 
         <RoomMembershipButton
           roomId={room.id}

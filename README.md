@@ -85,19 +85,28 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**` — 104 tests covering auth at the API boundary, onboarding
+  over `tests/integration/**` — 109 tests covering auth at the API boundary, onboarding
   and response privacy, RLS/grant behaviour per role, `create_room` atomicity
   (including the revoked-grant rollback), joining and capacity races, the shared focus
-  timer state machine and personal-goal privacy. It needs the local stack
+  timer state machine, personal-goal privacy, and live Realtime delivery of
+  `focus_sessions` changes over a real WebSocket. It needs the local stack
   (`npx supabase start && npx supabase db reset`) and never uses a service-role key.
   `passWithNoTests` stays unset, so a missing suite still exits non-zero.
   See `tests/integration/README.md`.
-- `.github/workflows/ci.yml` runs both suites on every push and pull request: a
-  `quality` job (lint, types, unit tests, build — no env or secrets) and an
-  `integration` job that stands up an isolated local Supabase, applies migrations from
-  scratch and runs the integration suite. Both jobs use the Node version pinned in
-  `.nvmrc`, and the workflow is `permissions: contents: read` with no repository
-  secrets.
+- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 12 Chromium tests
+  driving the real app (`next dev`) against the local stack: the full two-student
+  workflow through the forms, private-room access, expiry/failure/recovery scenarios,
+  and Realtime-vs-polling proven on an intercepted WebSocket (including stale and
+  duplicate frame replay). Test users are scoped to a per-run id and deleted by the
+  global teardown. It needs the local stack plus `npx playwright install chromium`.
+  See `tests/e2e/README.md`.
+- `.github/workflows/ci.yml` runs all three suites on every push and pull request: a
+  `quality` job (lint, types, unit tests, build — no env or secrets) and — each after
+  `quality` — an `integration` job and an `e2e` job that stand up their own isolated
+  local Supabase, apply migrations from scratch and run their suite (the e2e job also
+  installs Chromium and uploads the Playwright report on failure). All jobs use the
+  Node version pinned in `.nvmrc`, and the workflow is `permissions: contents: read`
+  with no repository secrets.
 
 ## Local Supabase
 
@@ -117,8 +126,8 @@ unique study alias once, then discover public rooms and create your own.
 | `/` | public | Landing page with sign-up and browse calls to action |
 | `/auth/*` | public | Password auth. Local Supabase has email auto-confirm on, so sign-up returns a session and routes to `/onboarding`; otherwise the success page is shown |
 | `/onboarding` | signed in | One-time study alias via `POST /api/profile` |
-| `/rooms` | signed in | Public room discovery with a `?q=` search over name, subject and exam track |
-| `/rooms/new` | signed in, alias chosen | Create a room via `POST /api/rooms` |
+| `/rooms` | signed in | Public room discovery with a `?q=` search over name, subject and exam track; rooms you belong to link straight into their workspace |
+| `/rooms/new` | signed in, alias chosen | Create a room via `POST /api/rooms` and enter its workspace |
 | `GET /api/rooms` | signed in | Shaped public rooms, `401` when unauthenticated |
 | `POST /api/profile` | signed in | Creates the profile row, `409 alias_taken` on a case-insensitive collision |
 | `POST /api/rooms` | signed in, alias chosen | `401` / `400 validation` / `403 onboarding_required` / `201` |

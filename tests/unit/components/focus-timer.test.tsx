@@ -3,7 +3,7 @@ import { FocusTimer } from "@/components/focus-timer";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { push, fetchMock, channel, removeChannel } = vi.hoisted(() => {
+const { push, fetchMock, channel, removeChannel, setAuth } = vi.hoisted(() => {
   const channel = {
     on: vi.fn(() => channel),
     subscribe: vi.fn((callback?: (status: string) => void) => {
@@ -16,6 +16,7 @@ const { push, fetchMock, channel, removeChannel } = vi.hoisted(() => {
     fetchMock: vi.fn(),
     channel,
     removeChannel: vi.fn(),
+    setAuth: vi.fn(() => Promise.resolve()),
   };
 });
 
@@ -27,6 +28,7 @@ vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     channel: vi.fn(() => channel),
     removeChannel,
+    realtime: { setAuth },
   }),
 }));
 
@@ -136,11 +138,26 @@ describe("FocusTimer", () => {
     expect(screen.getByText(/1500 min session|25 min session/)).toBeInTheDocument();
   });
 
-  it("reports the realtime channel as live once subscribed", () => {
+  it("never shows more time than the session was granted, even when the clock lags", () => {
+    // The display clock advances once a second, so right after a start it can
+    // read up to a tick behind the server: the raw delta is 25:01 here.
+    renderTimer({
+      initialSession: { ...runningSession, ends_at: new Date(START + 1_501_000).toISOString() },
+    });
+
+    expect(screen.getByText("25:00")).toBeInTheDocument();
+  });
+
+  it("reports the realtime channel as live once subscribed", async () => {
     renderTimer();
+    await act(async () => {});
 
     expect(channel.subscribe).toHaveBeenCalled();
     expect(screen.getByText("Live")).toBeInTheDocument();
+    // Auth settles before the join so the filter is registered as the user.
+    expect(setAuth.mock.invocationCallOrder[0]).toBeLessThan(
+      channel.subscribe.mock.invocationCallOrder[0],
+    );
   });
 
   it("renders recent sessions with their outcome", () => {

@@ -140,27 +140,45 @@ export function FocusTimer({
   // Realtime: one change event is enough to re-read the authoritative state.
   useEffect(() => {
     const supabase = createClient();
-    const channel = supabase
-      .channel(`focus-${roomId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "focus_sessions", filter: `room_id=eq.${roomId}` },
-        () => {
-          void refresh();
-        },
-      )
-      .subscribe((status) => {
-        setSync(
-          status === "SUBSCRIBED"
-            ? "live"
-            : status === "CHANNEL_ERROR" || status === "TIMED_OUT"
-              ? "reconnecting"
-              : "connecting",
-        );
+    let disposed = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    // The join payload is built when the channel subscribes, and the server
+    // registers the change filter under the JWT claims it saw there — so the
+    // session token has to be on the client before the join goes out, or the
+    // registration happens as `anon` and is rejected.
+    void supabase.realtime
+      .setAuth()
+      .then(() => {
+        if (disposed) return;
+        channel = supabase
+          .channel(`focus-${roomId}`)
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "focus_sessions", filter: `room_id=eq.${roomId}` },
+            () => {
+              void refresh();
+            },
+          )
+          .subscribe((status) => {
+            setSync(
+              status === "SUBSCRIBED"
+                ? "live"
+                : status === "CHANNEL_ERROR" || status === "TIMED_OUT"
+                  ? "reconnecting"
+                  : "connecting",
+            );
+          });
+      })
+      .catch(() => {
+        // Without auth the join would be rejected server-side; say so instead
+        // of pretending to be live. The 20-second poll still covers reads.
+        if (!disposed) setSync("reconnecting");
       });
 
     return () => {
-      void supabase.removeChannel(channel);
+      disposed = true;
+      if (channel) void supabase.removeChannel(channel);
     };
   }, [roomId, refresh]);
 
@@ -203,9 +221,15 @@ export function FocusTimer({
 
   let remainingSeconds: number | null = null;
   if (session?.state === "running") {
-    remainingSeconds = Math.max(
-      0,
-      Math.round((Date.parse(session.ends_at) - nowMs) / 1000),
+    // The clock only advances once a second, so this read can lag by up to a
+    // tick; clamped to the session's length, a fresh start can never show
+    // more time than the session was granted.
+    remainingSeconds = Math.min(
+      session.duration_seconds,
+      Math.max(
+        0,
+        Math.round((Date.parse(session.ends_at) - nowMs) / 1000),
+      ),
     );
   } else if (session?.state === "paused" && session.paused_at) {
     remainingSeconds = Math.max(

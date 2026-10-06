@@ -70,7 +70,7 @@ describe("RoomCreateForm", () => {
     expect(screen.getByRole("button", { name: "Create room" })).toBeEnabled();
   });
 
-  it("submits the room payload and returns to discovery", async () => {
+  it("submits the room payload and enters the new workspace", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse(201, { room: { id: "room-1", name: "Calculus" } }),
     );
@@ -78,7 +78,7 @@ describe("RoomCreateForm", () => {
 
     fillAndSubmit();
 
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/rooms"));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/rooms/room-1"));
     expect(fetchMock.mock.calls[0][0]).toBe("/api/rooms");
     expect(submittedBody()).toEqual({
       name: "Calculus Study Room",

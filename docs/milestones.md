@@ -10,7 +10,8 @@ Working log: what has landed, what each milestone still owes.
 | D — minimal working application | `b55bff1` | done |
 | E — automated integration tests and CI | `24ba4c2` | done |
 | F — public room joining and capacity enforcement | `f6c6411` | done |
-| G — shared study workspace, synchronized focus timers and personal goals | this change | done |
+| G — shared study workspace, synchronized focus timers and personal goals | `1937e16` | done |
+| H — browser end-to-end suite and realtime reliability | this change | done |
 
 ## Milestone D — task breakdown
 
@@ -220,11 +221,69 @@ Working log: what has landed, what each milestone still owes.
       harness. Database left with `profiles=0 rooms=0 members=0 sessions=0 goals=0
       users=0`.
 
+## Milestone H — task breakdown
+
+- [x] Preflight — clean tree at `1937e16`, CI green from the push, local stack
+      healthy, and a read-only pass over the spec before writing any code.
+- [x] Playwright foundation — `@playwright/test@1.63.0` pinned in devDependencies
+      (Chromium only), `playwright.config.ts` (one `E2E_RUN_ID` per invocation,
+      `next dev` web server at `http://localhost:3000`, 90 s test / 60 s navigation
+      timeouts, `retries: 1` and `workers: 2` in CI, HTML report in CI),
+      `global-setup.ts` reusing the integration env guard (loopback-only, publishable
+      key only, schema applied) and `global-teardown.ts` deleting `e2e+<runId>%` users
+      through a CTE count (psql's `DELETE n` status line broke a plain `returning`
+      parse; run ids are fixed length so prefixes cannot overlap).
+- [x] App gaps the browser flows exposed — `RoomCard` gained an "Enter room" link for
+      the owner/members and `RoomCreateForm` now enters the new workspace on `201`
+      (there was no navigation to `/rooms/[id]` anywhere); the countdown is clamped to
+      the session duration (the display clock advances once a second, so a fresh start
+      could read `25:01`); and the realtime subscription now `await`s
+      `supabase.realtime.setAuth()` before `channel().subscribe()` — the join payload
+      is built at subscribe time, and without the JWT on the client the server
+      registers the `room_id` filter as `anon`, which WALRUS rejects with
+      `invalid column for filter room_id`, leaving every browser subscription silently
+      dead (the channel still reports `SUBSCRIBED`; only the events never come).
+      `next.config.ts` also sets `allowedDevOrigins: ["127.0.0.1"]` — Next 16's dev
+      server withholds its scripts from unrecognised origins, which renders the page
+      without hydration and makes every client-side test lie.
+- [x] E2E specs (12 tests, four files) — `student-workflow.spec.ts` (the whole journey
+      through real forms in two independent contexts: registration, onboarding, room
+      creation, a running session with pause/resume propagating, personal goals
+      staying private on the owner's fresh render, ending, leaving, 404);
+      `private-room.spec.ts` (invisible in discovery, owner enters, non-members
+      refused); `access-expiry.spec.ts` (signed-out redirects, indistinguishable 404s,
+      full/closed rooms, owner-only controls, API abort + retry in the UI, a deadline
+      that passed while nobody watched, session loss on the next request);
+      `realtime.spec.ts` (a start reaching the member over WebSocket proven by a
+      captured `postgres_changes` frame plus the poll-phase observation, a dropped
+      socket reporting `Reconnecting…` and recovering, and stale/duplicate injected
+      frames failing to corrupt the view). Helpers cover run-scoped users, room
+      fixtures/selector anchors, the `routeWebSocket` capture/replay (Phoenix tuple
+      wire format, `connectToServer` + re-delivery so observation never mutes the
+      socket) and workspace-read counting.
+- [x] Realtime integration tests — `tests/integration/realtime-focus.test.ts` (5):
+      delivery to a subscribed member, silence for outsiders in public and private
+      rooms, a late subscriber, and rejoin without duplicate rows; suite 104 → **109**.
+- [x] Tests — unit 321 → **325** (`room-card.test.tsx` for the enter link, the
+      focus-timer auth-before-subscribe ordering and the countdown clamp; the
+      create-form test now asserts entry into the new workspace); e2e **12**.
+- [x] CI — a third `e2e` job mirroring `integration` (own local Supabase, migrations
+      from scratch, `npx playwright install --with-deps chromium`, report and traces
+      uploaded on failure, `supabase stop --no-backup` in `always()`), workflow still
+      `permissions: contents: read` with no secrets.
+- [x] Docs — README testing section (three suites, counts, CI shape),
+      `tests/e2e/README.md` (isolation scheme, poll-phase technique, capture/replay,
+      auth-before-join and hydration notes), this file.
+- [x] Gates — `npm run lint`, `npx tsc --noEmit`, `npm test` (325), `npm run build`,
+      `npm run test:integration` (109), `npm run test:e2e` (12, teardown removing
+      every run user — `auth.users` back to 0).
+
 ## Not in this milestone
 
-- **Integration coverage is API- and RLS-level.** Pages and the proxy redirect are
-  covered by unit tests, not by a browser against a running server; the realtime
-  subscription path is unit-tested with a mocked channel, not against a live socket.
+- **Browser coverage arrived in H, API/RLS coverage still leads.** Pages are driven by
+  the Chromium suite and the realtime subscription now runs against live sockets, but
+  the deepest adversarial coverage (races, grants, privacy) remains at the integration
+  level.
 - **No member lists, invites or private-room joining.** Only the caller learns their
   own membership, and a private room stays invisible to the public join endpoint;
   sharing an invite to a private room is not built.

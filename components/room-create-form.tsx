@@ -31,7 +31,8 @@ type ApiIssue = {
   message: string;
 };
 
-type ApiErrorBody = {
+type ApiResponseBody = {
+  room?: { id?: unknown };
   error?: { code?: string; message?: string; issues?: ApiIssue[] };
 };
 
@@ -90,10 +91,13 @@ export function RoomCreateForm({
         }),
       });
 
-      const body = (await response.json().catch(() => null)) as ApiErrorBody | null;
+      const body = (await response.json().catch(() => null)) as ApiResponseBody | null;
 
       if (response.status === 201) {
-        router.push("/rooms");
+        // Enter the workspace directly: it is only reachable by URL, and a
+        // private room never shows up in discovery for anyone to click later.
+        const roomId = body?.room?.id;
+        router.push(typeof roomId === "string" ? `/rooms/${roomId}` : "/rooms");
         router.refresh();
         return;
       }

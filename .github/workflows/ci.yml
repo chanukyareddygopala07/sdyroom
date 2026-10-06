@@ -98,3 +98,71 @@ jobs:
       - name: Stop local Supabase
         if: always()
         run: npx supabase stop --no-backup
+
+  e2e:
+    name: Browser e2e tests (local Supabase)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: quality
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Uses the pinned supabase CLI from devDependencies (2.119.0), so the
+      # stack version matches local development exactly.
+      - name: Start local Supabase
+        run: npx supabase start
+
+      - name: Read stack endpoints
+        run: |
+          npx supabase status -o json > /tmp/supabase-status.json
+          API_URL=$(node -p "require('/tmp/supabase-status.json').API_URL")
+          PUBLISHABLE_KEY=$(node -p "require('/tmp/supabase-status.json').PUBLISHABLE_KEY")
+          echo "::add-mask::$PUBLISHABLE_KEY"
+          echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$PUBLISHABLE_KEY" >> "$GITHUB_ENV"
+
+      - name: Wait for the API to accept requests
+        run: |
+          for attempt in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/health" || true)
+            if [ "$code" = "200" ]; then
+              echo "API ready after $attempt attempt(s)"
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            sleep 2
+          done
+          echo "Supabase API never became ready" >&2
+          exit 1
+
+      - name: Apply migrations from scratch
+        run: npx supabase db reset
+
+      # Chromium only; the exact browser build is pinned by @playwright/test.
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser e2e tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+      - name: Stop local Supabase
+        if: always()
+        run: npx supabase stop --no-backup
