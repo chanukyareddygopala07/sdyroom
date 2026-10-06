@@ -37,7 +37,16 @@ test("private room: the owner enters it, non-members are refused", async ({
     await signUpAndOnboard(outsider, "priv-outsider");
 
     // Discovery never lists it — neither the full list nor a name search.
-    await expect(outsider.getByRole("article")).toHaveCount(0);
+    // Other tests' public rooms may share this database, so wait until the
+    // results have actually rendered (cards, or the empty-world message)
+    // and then assert only that *this* room is absent, not that the list is.
+    await expect(
+      outsider
+        .getByRole("article")
+        .first()
+        .or(outsider.getByText("No public rooms yet. Create the first one.")),
+    ).toBeVisible();
+    await expect(roomCard(outsider, room.name)).toHaveCount(0);
     await searchRooms(outsider, room.name);
     await expect(outsider.getByText("No public rooms match your search.")).toBeVisible();
     await expect(roomCard(outsider, room.name)).toHaveCount(0);

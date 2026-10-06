@@ -274,9 +274,21 @@ Working log: what has landed, what each milestone still owes.
 - [x] Docs — README testing section (three suites, counts, CI shape),
       `tests/e2e/README.md` (isolation scheme, poll-phase technique, capture/replay,
       auth-before-join and hydration notes), this file.
+- [x] CI round 1 fixes — the first push failed two jobs, each root-caused against a
+      cold stack: the server acks a join *before* registering its `postgres_changes`
+      filter (seconds on a freshly started service) and a write inside that window is
+      dropped with no replay — `focus-timer` and the integration `subscribe()` now
+      pass `postgres_changes_options: { wait: true }`, so the reply is held until
+      registration confirms (the reply echoes the server-side filter ids, failures
+      surface as `CHANNEL_ERROR`), verified with repeated cold `realtime` restarts;
+      and `private-room.spec.ts` asserted an *empty* discovery list, which under
+      parallel workers sees other tests' public rooms — it now waits for the list to
+      render and asserts only that this private room is absent.
 - [x] Gates — `npm run lint`, `npx tsc --noEmit`, `npm test` (325), `npm run build`,
-      `npm run test:integration` (109), `npm run test:e2e` (12, teardown removing
-      every run user — `auth.users` back to 0).
+      `npm run test:integration` (109, twice from a cold realtime service),
+      `npm run test:e2e` (12 under CI's exact knobs — `CI=true`, 2 workers, retries —
+      from a cold realtime service, teardown removing every run user — `auth.users`
+      back to 0).
 
 ## Not in this milestone
 

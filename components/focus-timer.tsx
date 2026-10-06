@@ -147,12 +147,19 @@ export function FocusTimer({
     // registers the change filter under the JWT claims it saw there — so the
     // session token has to be on the client before the join goes out, or the
     // registration happens as `anon` and is rejected.
+    //
+    // `wait: true` makes the server hold the join reply until the filter is
+    // actually registered: `SUBSCRIBED` — the "Live" badge — then means
+    // frames will be delivered, instead of landing in the seconds before an
+    // unconfirmed registration completes, which are silently dropped.
     void supabase.realtime
       .setAuth()
       .then(() => {
         if (disposed) return;
         channel = supabase
-          .channel(`focus-${roomId}`)
+          .channel(`focus-${roomId}`, {
+            config: { postgres_changes_options: { wait: true } },
+          })
           .on(
             "postgres_changes",
             { event: "*", schema: "public", table: "focus_sessions", filter: `room_id=eq.${roomId}` },

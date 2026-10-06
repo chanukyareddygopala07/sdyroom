@@ -54,15 +54,16 @@ type Subscription = {
 };
 
 /**
- * Subscribes a client to a room's focus_sessions stream. The 500 ms grace
- * after SUBSCRIBED is the subscription-settle window: the join ack can
- * precede the server-side postgres_changes registration, and a write inside
- * it may not be delivered — verified against the local stack, not assumed.
- * It is generous because the suite runs alongside seven other files and
- * delivery has to survive that load, not just an idle machine.
+ * Subscribes a client to a room's focus_sessions stream. `wait: true` makes
+ * the server hold the join reply until it has registered the filter, so
+ * `SUBSCRIBED` means frames are deliverable — without it a write inside the
+ * unconfirmed window (seconds on a freshly started service) is dropped with
+ * no replay, which is how this suite first failed on CI.
  */
 async function subscribe(user: TestUser, roomId: string): Promise<Subscription> {
-  const channel = user.client.channel(`focus-${roomId}-${user.id.slice(0, 8)}`);
+  const channel = user.client.channel(`focus-${roomId}-${user.id.slice(0, 8)}`, {
+    config: { postgres_changes_options: { wait: true } },
+  });
   const frames: PostgresFrame[] = [];
   channel.on(
     "postgres_changes",
@@ -77,7 +78,6 @@ async function subscribe(user: TestUser, roomId: string): Promise<Subscription> 
       }
     });
   });
-  await sleep(500);
   return {
     frames,
     close: async () => {

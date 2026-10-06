@@ -79,6 +79,15 @@ Three techniques make the realtime assertions structural rather than timing-base
    no column grants). `focus-timer` therefore `await`s
    `supabase.realtime.setAuth()` before subscribing, and the e2e realtime tests fail
    loudly if a join frame ever lacks a JWT.
+4. **The join waits for registration.** By default the server acks the join before the
+   `postgres_changes` filter is registered — up to ~3 s on a freshly started service —
+   and a write inside that window is dropped with no replay. `focus-timer` and the
+   integration `subscribe()` helper therefore pass
+   `config: { postgres_changes_options: { wait: true } }`, which makes the server hold
+   the reply until registration confirms (the reply echoes the server-side filter
+   ids). `SUBSCRIBED`/`Live` then means frames are deliverable, registration failures
+   surface as `CHANNEL_ERROR` instead of silence, and the join timeout is extended
+   automatically.
 
 ## App/origin notes that bit us once
 

@@ -3,22 +3,24 @@ import { FocusTimer } from "@/components/focus-timer";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { push, fetchMock, channel, removeChannel, setAuth } = vi.hoisted(() => {
-  const channel = {
-    on: vi.fn(() => channel),
-    subscribe: vi.fn((callback?: (status: string) => void) => {
-      callback?.("SUBSCRIBED");
-      return channel;
-    }),
-  };
-  return {
-    push: vi.fn(),
-    fetchMock: vi.fn(),
-    channel,
-    removeChannel: vi.fn(),
-    setAuth: vi.fn(() => Promise.resolve()),
-  };
-});
+const { push, fetchMock, channel, channelFactory, removeChannel, setAuth } =
+  vi.hoisted(() => {
+    const channel = {
+      on: vi.fn(() => channel),
+      subscribe: vi.fn((callback?: (status: string) => void) => {
+        callback?.("SUBSCRIBED");
+        return channel;
+      }),
+    };
+    return {
+      push: vi.fn(),
+      fetchMock: vi.fn(),
+      channel,
+      channelFactory: vi.fn(() => channel),
+      removeChannel: vi.fn(),
+      setAuth: vi.fn(() => Promise.resolve()),
+    };
+  });
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, refresh: vi.fn() }),
@@ -26,7 +28,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
-    channel: vi.fn(() => channel),
+    channel: channelFactory,
     removeChannel,
     realtime: { setAuth },
   }),
@@ -158,6 +160,11 @@ describe("FocusTimer", () => {
     expect(setAuth.mock.invocationCallOrder[0]).toBeLessThan(
       channel.subscribe.mock.invocationCallOrder[0],
     );
+    // The join waits for the server's registration confirmation, so "Live"
+    // can only be reported once frames are actually deliverable.
+    expect(channelFactory).toHaveBeenCalledWith(`focus-${ROOM}`, {
+      config: { postgres_changes_options: { wait: true } },
+    });
   });
 
   it("renders recent sessions with their outcome", () => {
