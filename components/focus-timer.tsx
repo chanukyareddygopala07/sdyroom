@@ -17,6 +17,16 @@ const POLL_INTERVAL_MS = 20000;
 
 type SyncState = "connecting" | "live" | "reconnecting";
 
+/**
+ * The browser's own verdict on the network. The `offline`/`online` events it
+ * drives land the moment connectivity changes, while the socket's error and
+ * a failed poll can lag by tens of seconds — so the sync indicator follows
+ * them before any stale callback can speak.
+ */
+function browserIsOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
 type WorkspaceSnapshot = {
   session: FocusSession | null;
   history: FocusSession[];
@@ -105,6 +115,11 @@ export function FocusTimer({
   const [nowMs, setNowMs] = useState(initialServerNowMs);
   const offsetRef = useRef(0);
   const expiryHandledRef = useRef(false);
+  /**
+   * The channel has acknowledged its join; only then may the UI say "Live".
+   * A successful read proves the HTTP path, not that frames are deliverable.
+   */
+  const subscribedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -129,13 +144,35 @@ export function FocusTimer({
       setSession(body.session);
       setHistory(body.history);
       setViewerRole(body.viewer_role);
-      setSync("live");
+      // A read only proves the HTTP path. "Live" still needs an
+      // acknowledged subscription, and a response that resolved while the
+      // network was already gone must not overrule the offline indication.
+      if (!browserIsOffline() && subscribedRef.current) {
+        setSync("live");
+      }
       setError(null);
     } catch {
       // Keep showing the last snapshot; the next poll retries.
       setSync((current) => (current === "live" ? "reconnecting" : current));
     }
   }, [roomId, router]);
+
+  // The browser knows first: `offline`/`online` fire the moment connectivity
+  // changes, while the socket surfaces its own error only after rejoin
+  // timeouts. The indicator follows those events directly; the socket itself
+  // is reconnected and re-subscribed by the Supabase client.
+  useEffect(() => {
+    const onOffline = () => setSync("reconnecting");
+    const onOnline = () => setSync("connecting");
+
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
+
+    return () => {
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
+    };
+  }, []);
 
   // Realtime: one change event is enough to re-read the authoritative state.
   useEffect(() => {
@@ -168,12 +205,23 @@ export function FocusTimer({
             },
           )
           .subscribe((status) => {
+            if (disposed) return;
+            if (status === "SUBSCRIBED") {
+              // An ack that raced the connection dropping must not paint
+              // "Live" over the offline indication.
+              if (browserIsOffline()) {
+                setSync("reconnecting");
+                return;
+              }
+              subscribedRef.current = true;
+              setSync("live");
+              return;
+            }
+            subscribedRef.current = false;
             setSync(
-              status === "SUBSCRIBED"
-                ? "live"
-                : status === "CHANNEL_ERROR" || status === "TIMED_OUT"
-                  ? "reconnecting"
-                  : "connecting",
+              status === "CHANNEL_ERROR" || status === "TIMED_OUT"
+                ? "reconnecting"
+                : "connecting",
             );
           });
       })
@@ -185,6 +233,7 @@ export function FocusTimer({
 
     return () => {
       disposed = true;
+      subscribedRef.current = false;
       if (channel) void supabase.removeChannel(channel);
     };
   }, [roomId, refresh]);

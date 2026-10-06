@@ -3,7 +3,7 @@ import { FocusTimer } from "@/components/focus-timer";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { push, fetchMock, channel, channelFactory, removeChannel, setAuth } =
+const { push, fetchMock, channel, channelFactory, removeChannel, setAuth, router } =
   vi.hoisted(() => {
     const channel = {
       on: vi.fn(() => channel),
@@ -12,8 +12,14 @@ const { push, fetchMock, channel, channelFactory, removeChannel, setAuth } =
         return channel;
       }),
     };
+    const push = vi.fn();
+    // Stable across calls, as Next's real router is: a fresh object per
+    // render would churn `refresh` and re-run the subscription effect on
+    // every state change.
+    const router = { push, refresh: vi.fn() };
     return {
-      push: vi.fn(),
+      push,
+      router,
       fetchMock: vi.fn(),
       channel,
       channelFactory: vi.fn(() => channel),
@@ -23,7 +29,7 @@ const { push, fetchMock, channel, channelFactory, removeChannel, setAuth } =
   });
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push, refresh: vi.fn() }),
+  useRouter: () => router,
 }));
 
 vi.mock("@/lib/supabase/client", () => ({
@@ -87,6 +93,17 @@ function jsonResponse(status: number, body: unknown) {
   };
 }
 
+/**
+ * jsdom does not wire its `offline`/`online` events to `navigator.onLine`,
+ * so the browser's verdict is stubbed explicitly next to each dispatch.
+ */
+function stubBrowserOnline(online: boolean): void {
+  Object.defineProperty(window.navigator, "onLine", {
+    configurable: true,
+    get: () => online,
+  });
+}
+
 function workspaceResponse() {
   return workspaceResponseWith(runningSession);
 }
@@ -130,6 +147,7 @@ describe("FocusTimer", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    Reflect.deleteProperty(window.navigator, "onLine");
     vi.useRealTimers();
   });
 
@@ -311,5 +329,117 @@ describe("FocusTimer", () => {
       "Could not reach the server. Please try again.",
     );
     expect(screen.getByText("1:30")).toBeInTheDocument();
+  });
+
+  it("reports the browser going offline immediately, without waiting for a poll", async () => {
+    renderTimer();
+    await act(async () => {});
+    expect(screen.getByRole("status")).toHaveTextContent("Live");
+
+    stubBrowserOnline(false);
+    fireEvent(window, new Event("offline"));
+
+    // No timer was advanced: the event listener itself moves the indicator.
+    expect(screen.getByRole("status")).toHaveTextContent("Reconnecting…");
+  });
+
+  it("reports the browser coming back online as connecting", async () => {
+    renderTimer();
+    await act(async () => {});
+    stubBrowserOnline(false);
+    fireEvent(window, new Event("offline"));
+
+    stubBrowserOnline(true);
+    fireEvent(window, new Event("online"));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Connecting…");
+  });
+
+  it("restores live only when the subscription acknowledges again", async () => {
+    renderTimer();
+    await act(async () => {});
+    expect(channel.subscribe).toHaveBeenCalled();
+    const ack = channel.subscribe.mock.calls[0]?.[0];
+
+    stubBrowserOnline(false);
+    fireEvent(window, new Event("offline"));
+    stubBrowserOnline(true);
+    fireEvent(window, new Event("online"));
+    expect(screen.getByRole("status")).toHaveTextContent("Connecting…");
+
+    act(() => ack?.("SUBSCRIBED"));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Live");
+  });
+
+  it("does not paint Live from an ack that raced the offline transition", async () => {
+    renderTimer();
+    await act(async () => {});
+    const ack = channel.subscribe.mock.calls[0]?.[0];
+
+    stubBrowserOnline(false);
+    fireEvent(window, new Event("offline"));
+    act(() => ack?.("SUBSCRIBED"));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Reconnecting…");
+  });
+
+  it("does not report Live from a successful read before the subscription acknowledges", async () => {
+    channel.subscribe.mockImplementationOnce(() => channel);
+    renderTimer();
+    await act(async () => {});
+    expect(channel.subscribe).toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("Connecting…");
+
+    // The first poll succeeds over HTTP; without a join ack that must not
+    // be enough to claim frames are deliverable.
+    await act(async () => {
+      vi.advanceTimersByTime(20000);
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent("Connecting…");
+  });
+
+  it("returns to Live after a failed read once the subscription is acknowledged", async () => {
+    renderTimer();
+    await act(async () => {});
+    expect(screen.getByRole("status")).toHaveTextContent("Live");
+
+    fetchMock.mockRejectedValueOnce(new Error("flaky"));
+    await act(async () => {
+      vi.advanceTimersByTime(20000);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Reconnecting…");
+
+    await act(async () => {
+      vi.advanceTimersByTime(20000);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Live");
+  });
+
+  it("removes its network listeners and subscription when unmounted", async () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+
+    const { unmount } = renderTimer();
+    await act(async () => {});
+
+    const offlineListener = addSpy.mock.calls.find(
+      (call) => call[0] === "offline",
+    )?.[1];
+    const onlineListener = addSpy.mock.calls.find(
+      (call) => call[0] === "online",
+    )?.[1];
+    expect(offlineListener).toBeDefined();
+    expect(onlineListener).toBeDefined();
+
+    unmount();
+
+    expect(removeSpy).toHaveBeenCalledWith("offline", offlineListener);
+    expect(removeSpy).toHaveBeenCalledWith("online", onlineListener);
+    expect(removeChannel).toHaveBeenCalled();
+
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
   });
 });
