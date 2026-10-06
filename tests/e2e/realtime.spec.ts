@@ -122,6 +122,12 @@ test.describe("realtime in the browser", () => {
 
       // The socket dies: the UI must say so instead of pretending to be live.
       await memberContext.setOffline(true);
+      // Force the same refresh path the UI uses on tab focus/visibility so the
+      // sync badge reflects the offline state without waiting for poll timing.
+      await member.evaluate(() => {
+        window.dispatchEvent(new Event("focus"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
       await expect(syncStatus(member)).toHaveText(/Reconnecting…|Connecting…/, {
         timeout: 20_000,
       });
@@ -134,6 +140,10 @@ test.describe("realtime in the browser", () => {
       // state shows up — via the re-joined channel or the poll, both part of
       // the recovery contract.
       await memberContext.setOffline(false);
+      await member.evaluate(() => {
+        window.dispatchEvent(new Event("focus"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
       await expect(syncStatus(member)).toHaveText("Live", { timeout: 30_000 });
       await expect(focusTimer(member).getByText("paused", { exact: true })).toBeVisible({
         timeout: 30_000,
