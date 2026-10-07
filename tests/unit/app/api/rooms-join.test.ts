@@ -94,8 +94,8 @@ describe("POST /api/rooms/[id]/join", () => {
     expect(joinRoom).not.toHaveBeenCalled();
   });
 
-  it("accepts an absent body and an empty object", async () => {
-    for (const body of [undefined, "{}"]) {
+  it("accepts an absent body, whitespace-only body, and an empty object", async () => {
+    for (const body of [undefined, " \n\t ", "{}"]) {
       const { request, context } = post(body);
 
       const response = await POST(request, context);
