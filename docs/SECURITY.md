@@ -33,6 +33,12 @@ file carries the model behind them.
 | Hostile file | Extension spoofing, oversized payloads, path traversal in filenames | Magic-byte sniffing decides the content type, the extension only cross-checks it; 20 MiB ceiling (refused on `content-length` before buffering); filenames without path separators or `..`; storage keys are built from server-generated UUIDs only |
 | Leaked URL | A signed URL pasted into a chat | TTL of 300 s (`DOWNLOAD_TTL_SECONDS`), re-issued only after a fresh authorization check; the token carries the expiry inside it |
 | Database row tampering | Direct `update`/`delete` through SQL or the API | `update`/`delete` are uploader-only, `owner_id`/`room_id`/`storage_path`/timestamps are outside the `UPDATE` grant, `updated_at` is owned by `study_resources_touch`, and `storage.protect_delete()` blocks a plain `delete from storage.objects` |
+| Invitation id guessing | A harvested or enumerated `room_invitations.id`, used against accept/reject/revoke | Every transition is a `SECURITY DEFINER` RPC that re-derives `auth.uid()` and compares it to `invitee_id` (or re-proves the room owner) — the id alone grants nothing; missing, not-yours and revoked are one byte-identical `404` |
+| Direct PostgREST write to invitations | Hand-written `POST /rest/v1/room_invitations` | No `INSERT`/`UPDATE`/`DELETE` grant exists, so the write is refused on privilege grounds (`42501`) before any policy or CHECK is consulted — the same shape as `focus_sessions` |
+| Expired / revoked / already-used invitation replay | Re-accepting after expiry, after the owner revoked, or a second accept after success | Status gate plus read-time `expires_at > now()` inside one locked transaction: expired → `410` with no write, resolved → `409`, and a repeat accept is an idempotent `200 already_member` that still consumes the invitation |
+| Forwarded invitation | The invitee copies their inbox row (or its id) to someone else | There is nothing to forward: invitations are addressed to `invitee_id`, and acceptance binds to `auth.uid()` — a third party acting on the id gets `404`. (Superseded the spec's bearer-link accepted risk: see `docs/prs/PR-07-private-invitations.md`.) |
+| Roster probing | A non-member reading `GET /api/rooms/[id]/members` or calling `room_roster` directly | The route proves membership first and the RPC re-proves it inside its own transaction; both a missing room and a forbidden one are the same `404`. The response carries alias/role/joined_at only — no user ids, no emails |
+| Invite spam by a room owner | An owner mass-inviting aliases | Not rate-limited (repo-wide gap, PR 10); bounded today by owner-only creation, the one-pending-per-(room, invitee) partial unique index, and 1–168 h TTL bounds |
 
 ## Room presence: what it discloses
 
@@ -43,6 +49,21 @@ file carries the model behind them.
 | Durability | Nothing persists. Presence lives in the Realtime service's memory; a socket close removes it (a 60 s heartbeat re-tracks a half-open one). `0006` adds **no** table, column, grant or publication entry, and the authorization probes it relies on roll back in the same transaction |
 | `studying` | Room-scoped by construction: `focus_sessions` records no starter column (one active row per room, owner-only control), so the flag reports the room's shared session, not any individual's private activity — a stated reconciliation in PR 06, not a hidden shortcut |
 | Spoofing | A member can lie about their own alias and flag. Presence is therefore never used for authorization, never joined to `profiles` server-side, and never overrides the caller's own identity (`is_own` comes from the tracked key, not the payload) |
+
+## Private room invitations: what it defends
+
+| Aspect | What it means |
+| --- | --- |
+| Addressing | One row is a contract between two users: `inviter_id` (the room's owner) and `invitee_id` (a named student). Only the invitee may read or act on it — policy `room_invitations_select_addressed` is the *read* side, and every write is a `SECURITY DEFINER` RPC that re-derives `auth.uid()`. **No token, hash or invite URL exists**, so there is nothing to leak, forward, brute-force or paste into a referrer |
+| Denial surface | The table is `SELECT`-only for clients (the whole-table grant exists because the policy references the id columns; neither id ever leaves the API — responses are shaped from `inviter_alias` / `invitee_alias`). Create, accept, reject and revoke have no grant at all: direct PostgREST writes die on `42501` before policy evaluation |
+| State machine | `status ∈ pending, accepted, rejected, revoked` with `pending ⇔ resolved_at IS NULL`; expiry is evaluated at read time (never stored, never a background job), so there is no stale `expired` state to disagree with the clock. Transitions lock the row `for update`, so racing accepts resolve to exactly one winner |
+| Entry | Acceptance seats the invitee through `join_room_core` — the *same* row-locked capacity/closed/idempotency implementation `join_room` uses — with the private gate opened only after a pending invitee row is proved. The core itself is executable by no application role, so `p_allow_private` is unreachable from a client |
+| Disclosure | Creating discloses to the invitee that a room exists (its name and the inviter's alias) — but only to a person the owner deliberately named, which is the feature. The roster discloses aliases, roles and join dates **to current members of that room only**; it exposes nothing else and is never used for authorization |
+| Spoofing | Aliases and room names are denormalised copies written at create time (immutable today — no alias editing or room renaming exists), and a member lying about their presence flag never touches invitations: presence is never an input to any invitation decision |
+
+The spec's bearer-link model and its accepted risk ("a forwarded link lets a
+third party in once") are **superseded**, not mitigated — see the
+reconciliation in `docs/prs/PR-07-private-invitations.md`.
 
 ## Study resources: where the rules live
 
@@ -68,9 +89,9 @@ Two details worth restating because they are easy to lose:
 
 | Suite | Command | What it pins down |
 | --- | --- | --- |
-| Unit | `npm test` | Validators, path building and ownership parsing, query scoping, every route's status/code matrix including the error branches, upload form and library UI behaviour |
-| Integration | `npm run test:integration` | Against the real local stack with real auth users: `tests/integration/study-resources.test.ts` (22) — privacy of columns and rows, anonymous listing, signed-URL reachability with its 300 s TTL and refusal without a signature, cross-user open/delete refusal, member read, non-member 404, **revocation on leaving**, `owner_id` rejection, impersonation of another student's folder (row *and* object), impersonation of the signed path, magic-byte mismatch, bucket privacy, `owner_id` grants, and the key-layout CHECK |
-| Browser | `npm run test:e2e` | `tests/e2e/resources.spec.ts` (5) — upload through the real form, private library, room sharing and delete in Chromium |
+| Unit | `npm test` | Validators, path building and ownership parsing, query scoping, every route's status/code matrix including the error branches, upload form and library UI behaviour, the invitation validators and all six invitation/roster routes, and the presence store |
+| Integration | `npm run test:integration` | Against the real local stack with real auth users: `tests/integration/study-resources.test.ts` (22) — privacy of columns and rows, anonymous listing, signed-URL reachability with its 300 s TTL and refusal without a signature, cross-user open/delete refusal, member read, non-member 404, **revocation on leaving**, `owner_id` rejection, impersonation of another student's folder (row *and* object), impersonation of the signed path, magic-byte mismatch, bucket privacy, `owner_id` grants, and the key-layout CHECK; `tests/integration/room-invitations.test.ts` (37) — invitation RLS and grant freezes, non-owner create refusal, alias addressing, every transition (accept/reject/revoke/expiry), the accept race against the last seat, roster denial for non-members, and policy/grant checksums |
+| Browser | `npm run test:e2e` | `tests/e2e/resources.spec.ts` (5) — upload through the real form, private library, room sharing and delete in Chromium; `tests/e2e/invitations.spec.ts` (4) — the invitation lifecycle in two real browsers (invite → inbox → accept, negatives for a stranger, rejection/revocation/expiry, and a full room) plus live presence annotation on the roster |
 
 CI runs all three (`.github/workflows/ci.yml`) with `permissions: contents: read`
 and no repository secrets.

@@ -1,9 +1,9 @@
 # PR 06 — Realtime room presence
 
-**Status:** implemented on `feat/room-presence` — [PR #6](https://github.com/chanukyareddygopala07/sdyroom/pull/6)
-in review. All suites and the build green locally (`lint`, `tsc`, 544 unit, 156
-integration, 22 e2e, `build`, `db lint`); CI and merge pending. The
-`docs/milestones.md` row flips to `done` with the merge commit, per DoD 4.
+**Status:** merged — [PR #6](https://github.com/chanukyareddygopala07/sdyroom/pull/6),
+merge commit `91d2bed`. All suites and the build were green before the merge
+(`lint`, `tsc`, 544 unit, 156 integration, 22 e2e, `build`, `db lint`);
+`docs/milestones.md` row flipped to `done` with the merge commit, per DoD 4.
 **Owner:** Dev A (OpenCode) · **Complexity:** Medium · **Migration:** `0006_realtime_private_channels.sql`
 **Depends on:** merged `main` (PR 01–05)
 

@@ -74,6 +74,13 @@ bucket** and three policies on `storage.objects`.
 `supabase/migrations/0006_realtime_private_channels.sql` adds no table, column or
 grant: two policies on `realtime.messages` that gate private Realtime channels
 (`room-presence-{roomId}`) to current members of the room named in the topic.
+`supabase/migrations/0007_room_invitations.sql` adds addressed private-room
+invitations and the roster read: one table (read-only for clients), one policy,
+five `SECURITY DEFINER` RPCs (`create_room_invitation`, `accept_room_invitation`,
+`reject_room_invitation`, `revoke_room_invitation`, `room_roster`), and one
+`CREATE OR REPLACE` that lifts the 0002 seat logic into an internal
+`join_room_core` while keeping `join_room`'s signature, behaviour and grants
+identical.
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
@@ -84,10 +91,11 @@ grant: two policies on `realtime.messages` that gate private Realtime channels
 | `study_goals` | `id`, `user_id` → `auth.users`, `room_id` → `rooms`, `title`, `target_seconds`, `target_count`, `status`, `completed_at`, `created_at`, `updated_at` | Personal rows: `status` ∈ `active`/`completed`, `completed_at` set and cleared by the `study_goals_touch` trigger (never accepted from a client), CHECK `(status = 'completed') = (completed_at is not null)`. Partial unique index on `(user_id, room_id, lower(title)) where status = 'active'` — one active goal per title, reusable once completed. `user_id`/`room_id` cascade on delete. |
 | `room_messages` | `id`, `room_id` → `rooms`, `user_id` → `auth.users`, `alias`, `body`, `seq`, `created_at` | Append-only chat history: `SELECT`+`INSERT` only, no `UPDATE`/`DELETE` grant and no such policy, so a message that was said stays said. `alias` is the sender's study alias copied at send time (rendering never joins `profiles`); `seq` is an identity column giving a total order for `before=` cursor pagination that `created_at` alone cannot. CHECKs: body trimmed, 1–2000 chars; alias ≤ 32. |
 | `study_resources` | `id`, `owner_id` → `auth.users`, `room_id` → `rooms`, `storage_path`, `title`, `original_filename`, `content_type`, `size_bytes`, `subject`, `chapter`, `created_at`, `updated_at` | `room_id IS NULL` = personal (uploader only), otherwise shared with that room's current members. `owner_id` defaults to `auth.uid()` and is granted for **neither** `INSERT` nor `SELECT`, so a browser cannot choose an owner and the column never leaves the database. `storage_path` is server-built and pinned by a regex CHECK to `personal/{owner}/{id}{ext}` or `rooms/{room}/{owner}/{id}{ext}`, with a second CHECK tying the two representations of scope together (`(room_id is null) = (storage_path like 'personal/%')`). `content_type` ∈ the five sniffed types, `size_bytes` 1–20 MiB. Unique on `storage_path`; `updated_at` owned by `study_resources_touch`. |
+| `room_invitations` | `id`, `room_id` → `rooms`, `inviter_id` → `auth.users`, `invitee_id` → `auth.users`, `inviter_alias`, `invitee_alias`, `room_name`, `status`, `expires_at`, `created_at`, `resolved_at` | Addressed invitation: the owner names a student by alias; only that student may read or act on it. `status` ∈ `pending`/`accepted`/`rejected`/`revoked` with `pending ⇔ resolved_at is null`; **no stored `expired` state** — `expires_at > created_at` is checked at read time. Partial unique index `room_invitations_one_pending (room_id, invitee_id) where status = 'pending'` (at most one pending invite per room+invitee, absorbs the create race → `23505` → `already_invited`); inbox and owner-list indexes on `invitee_id` / `inviter_id`. Alias and room-name copies are 1–32/1–100 char CHECKs. `SELECT` only for clients — all four writes are `SECURITY DEFINER` RPCs. |
 
 No sample rooms and no fabricated auth users are inserted by SQL: `supabase/seed.sql`
 is intentionally empty, and local test data is made only through the Auth API and the
-`create_room` / `join_room` RPCs.
+`create_room` / `join_room` / `create_room_invitation` RPCs.
 
 `focus_sessions` and `room_messages` are added to the `supabase_realtime`
 publication, so members' clients receive `postgres_changes` events for their room's
@@ -101,11 +109,11 @@ signed-URL endpoint).
 Grants are explicit and column-aware (`auto_expose_new_tables = false` in
 `config.toml`, so new tables receive no default API-role grants):
 
-| Grantee | `profiles` | `rooms` | `room_members` | `focus_sessions` | `study_goals` | `room_messages` | `study_resources` |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `anon` | none | none | none | none | none | none | none |
-| `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` | `SELECT` | `SELECT`, `INSERT`, `DELETE`, `UPDATE (title, target_seconds, target_count, status)` | `SELECT`, `INSERT` | `SELECT` / `INSERT` / `UPDATE (title, subject, chapter)` / `DELETE`, each on an explicit column list — **never `owner_id`** |
-| `service_role` | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges |
+| Grantee | `profiles` | `rooms` | `room_members` | `focus_sessions` | `study_goals` | `room_messages` | `study_resources` | `room_invitations` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `anon` | none | none | none | none | none | none | none | none |
+| `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` | `SELECT` | `SELECT`, `INSERT`, `DELETE`, `UPDATE (title, target_seconds, target_count, status)` | `SELECT`, `INSERT` | `SELECT` / `INSERT` / `UPDATE (title, subject, chapter)` / `DELETE`, each on an explicit column list — **never `owner_id`** | `SELECT` (whole table — the policy reads `inviter_id`/`invitee_id`, and Postgres checks privileges on every column a policy touches); **no write verb at all** |
+| `service_role` | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges |
 
 **No `UPDATE` or `DELETE` on `rooms` / `room_members`** — those flows are deliberately
 undeveloped. `authenticated` has no table-level `SELECT` on `profiles` by design: only
@@ -130,6 +138,15 @@ privilege grounds, and a `SELECT` never has it to leak. `storage_path` *is* gran
 for `SELECT` (the delete path needs to know which object to remove) but is excluded
 from `STUDY_RESOURCE_COLUMNS`, so no response ever carries it.
 
+`0007` is the second read-only table (after `focus_sessions`): `room_invitations`
+revokes everything and grants `SELECT` only. The grant is whole-table rather than
+column-scoped because the RLS policy itself references `inviter_id`/`invitee_id`, and
+Postgres checks column privileges on every column a query — including policy
+quals — touches; neither id ever leaves the API, which shapes responses from the
+alias columns instead. With no write grant, create/accept/reject/revoke cannot be
+reached through PostgREST at all (`42501` on privilege grounds), exactly like the
+focus RPCs.
+
 ## Row Level Security
 
 | Table | Policy | Effect |
@@ -148,6 +165,7 @@ from `STUDY_RESOURCE_COLUMNS`, so no response ever carries it.
 | `study_resources` | `study_resources_select_own_or_member` | own rows, plus rows whose `room_id` has a `room_members` row for `auth.uid()` **right now** — leaving a room revokes read access on the next query, with no file moved or deleted |
 | `study_resources` | `study_resources_insert_own_member` | `owner_id = auth.uid()`, membership of the target room, and a `storage_path` under the caller's own folder in the matching prefix |
 | `study_resources` | `study_resources_update_own` / `delete_own` | `owner_id = auth.uid()` — a room member can read a shared file and still cannot edit or remove it |
+| `room_invitations` | `room_invitations_select_addressed` (`0007`) | `invitee_id = auth.uid() or inviter_id = auth.uid()` — a student reads only invitations addressed to them, an owner only the ones they created, and a stranger reads nothing. Every *write* is an RPC, so there is no insert/update/delete policy to widen: the table simply has no write grant |
 | `realtime.messages` | `room_presence_select_member` / `room_presence_insert_member` (`0006`) | the whole of the private-channel gate for `room-presence-{uuid}` topics: `authenticated` only, extension must be `broadcast`/`presence`, and the uuid in the topic must match a current `room_members` row for `auth.uid()` — so a non-member (or an anonymous client) cannot join, cannot confirm a private room exists, and cannot read another room's roster. Realtime's authorization probes run as the caller inside a transaction that rolls back, so nothing is ever written |
 
 Storage objects have their own three policies (next section); they are not listed
@@ -262,6 +280,30 @@ membership path in the product, and they were necessary because the grants above
 No table grant or policy changed, so direct PostgREST writes keep failing exactly as
 before: `INSERT` hits RLS with `42501`, `DELETE` hits the missing grant with `42501`.
 
+## Invitation and roster functions (`0007_room_invitations.sql`)
+
+Six functions. Five are `SECURITY DEFINER` with `set search_path = ''`,
+schema-qualified references, `auth.uid()` read and null-checked first, execution
+revoked from `public`/`anon` and granted only to `authenticated` — the same
+constraints as `0002`–`0005`:
+
+| Function | Behaviour |
+| --- | --- |
+| `create_room_invitation(p_room_id, p_invitee_alias, p_ttl_hours) → jsonb` | Owner only, private rooms only (`room_public` otherwise). Resolves the alias to a user (`invitee_not_found`), refuses `self_invite`, an existing seat (`already_member`) or an existing pending row (`already_invited` — the loser of a create race hits `23505` on `room_invitations_one_pending` and maps to the same code). Copies `inviter_alias` / `invitee_alias` / `room_name` at create time and returns the shaped invitation with `invited`. |
+| `accept_room_invitation(p_invitation_id) → jsonb` | The invitee only (the id alone proves nothing — `auth.uid()` must equal `invitee_id`, else `not_found`). Locks the row, then gates: not pending → `used` / `rejected` / `revoked`; `expires_at <= now()` → `expired` (no write). Seats through `join_room_core` with the private gate opened — `room_full` / `room_closed` flow back unchanged — then flips to `accepted` with `resolved_at`. Returns `{code: joined \| already_member, room_id, room_name, member_count}`; a repeat accept is `already_member` and still consumes the invitation. |
+| `reject_room_invitation(p_invitation_id) → jsonb` | Same addressing and status gates; flips to `rejected` in place, taking no seat. Success returns `{code: 'ok'}` — deliberately distinct from the `rejected` failure code, so a caller can never mistake a successful rejection for the "already rejected" 409. |
+| `revoke_room_invitation(p_room_id, p_invitation_id) → jsonb` | The room's owner *and* the original inviter (re-proved inside the function). Locks the row, refuses anything already resolved (`not_found` — an accepted invitation is no longer an invitation, and a repeat revoke is indistinguishable), flips to `revoked`. |
+| `room_roster(p_room_id) → table(alias, role, joined_at)` | Membership re-checked inside the function (missing room and non-member both raise `42501`, which the route maps to the same `404` as anything else invisible). Returns display alias, role and `joined_at` ordered owner-first, then join time, then alias. No user ids — `room_members`' own grants and policies are untouched, so `room_members_select_own` still asserts "memberships private to the caller". |
+
+Plus `join_room_core(p_room_id, p_user_id, p_allow_private)` — the 0002 seat
+logic lifted verbatim, parameterised on the caller and the private gate —
+and `join_room(p_room_id)` replaced by a one-line wrapper passing
+`(p_room_id, auth.uid(), false)`. The `CREATE OR REPLACE` keeps an identical
+signature and ACL, so external behaviour and grants are unchanged; the core's
+`EXECUTE` is revoked from every application role, which makes
+`p_allow_private` unreachable from a client: only the invitation path, after
+it has proved a pending invitee row, can open it.
+
 ## Focus session and goal functions (`0003_focus_sessions_and_goals.sql`)
 
 Five functions, all `SECURITY DEFINER` with `set search_path = ''`, schema-qualified
@@ -299,22 +341,24 @@ All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001 … 0006
-npx supabase migration list --local # 0001 … 0006 present locally
+npx supabase db reset               # exit 0: applied 0001 … 0007
+npx supabase migration list --local # 0001 … 0007 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
 
-- RLS enabled on all seven tables: `profiles`, `rooms`, `room_members`,
-  `focus_sessions`, `study_goals`, `room_messages`, `study_resources`
-  (`relrowsecurity = t`).
-- 20 table policies on `public.*`, every one `to authenticated`; plus the two
+- RLS enabled on all eight tables: `profiles`, `rooms`, `room_members`,
+  `focus_sessions`, `study_goals`, `room_messages`, `study_resources`,
+  `room_invitations` (`relrowsecurity = t`).
+- 21 table policies on `public.*`, every one `to authenticated` (the 21st is
+  `room_invitations_select_addressed` from `0007`); plus the two
   `0006` policies on `realtime.messages` (`room_presence_select_member` /
   `room_presence_insert_member`) and the 3 storage policies on `storage.objects`
   for `study-resources` — 0 policies for any role other than `authenticated`
   across all of them. The presence policies are proven end to end by
   `tests/integration/presence-policies.test.ts` (member probe accepted,
-  non-member / cross-room / anonymous / wrong-topic probes refused).
+  non-member / cross-room / anonymous / wrong-topic probes refused), and the
+  invitation policies by `tests/integration/room-invitations.test.ts`.
 - FKs: `rooms.owner_id`/`room_members.user_id`/`profiles.id` → `auth.users`
   `ON DELETE CASCADE`; `room_members.room_id` → `rooms` `ON DELETE CASCADE`.
 - Composite PK `(room_id, user_id)`, unique `profiles_alias_lower_key` on `lower(alias)`.
@@ -396,6 +440,21 @@ against the local stack and covered end to end by
 | Cross-user writes | another student's `DELETE` → `404`, direct object write into someone else's `personal/{owner}/…` folder → denied, forged `owner_id` field → rejected by the API instead of ignored |
 | Key layout | a hand-written row pointing outside `personal/{owner}/{id}{ext}` / `rooms/{room}/{owner}/{id}{ext}` fails `study_resources_storage_path_layout`; `(room_id is null) = (storage_path like 'personal/%')` is enforced separately |
 | Upload validation | bytes that do not match the declared type/extension → `400 malformed_file`; the content type comes from sniffing, never from the browser |
+
+Private room invitations and the roster (`0007_room_invitations.sql`), covered
+end to end by `tests/integration/room-invitations.test.ts`:
+
+| Requirement | Result |
+| --- | --- |
+| Grants | `room_invitations`: `authenticated` `SELECT` only, no write verb, `anon`/`service_role` none (default ACL revoked first); the five RPCs: anon `f`, authenticated `t`, `search_path = ""`, `prosecdef = t`; `join_room_core` not executable by any application role |
+| Direct writes | authenticated `INSERT`/`UPDATE`/`DELETE` on `room_invitations` → `42501` (no grant) — every transition must be an RPC |
+| Read scoping | invitee sees rows addressed to them, owner sees rows they created, a third user sees 0 rows; policy and grant freezes asserted by checksum |
+| Addressing | create by alias → `invited`; unknown alias → `invitee_not_found`; self → `self_invite`; existing seat → `already_member`; a second pending row → `23505` → `already_invited`; public room → `room_public`; non-owner → `not_owner`, non-member → `room_not_found` (indistinguishable from missing) |
+| Accept | `joined` with a `room_members` `student` row and the invitation consumed; repeat accept → `already_member` (invitation still consumed); not-your-row / missing → identical `not_found` |
+| Rejection / revocation / expiry | `rejected` then re-accept → `409 rejected`; owner revoke → `409 revoked` on accept and `404` on a second revoke; backdated `expires_at` **and** `created_at` (the CHECK pairs them) → `410 expired` with the row untouched |
+| Capacity on accept | last-seat accept succeeds, the next → `409 room_full`, seat count never exceeds `capacity` |
+| Roster | members read alias/role/joined_at for the whole room (no user ids); non-member → `404`; `room_members` grants and policies byte-identical to before |
+| `join_room` unchanged | signature, ACL and behaviour identical after the `CREATE OR REPLACE`; private non-member still `room_not_found` |
 
 ## Notes and risks
 

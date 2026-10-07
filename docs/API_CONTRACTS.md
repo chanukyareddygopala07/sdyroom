@@ -28,7 +28,7 @@ Shared conventions:
 
 ---
 
-## Existing endpoints (unchanged by this milestone)
+## Existing endpoints (unchanged by PR 07)
 
 | Method | Path | Summary |
 | --- | --- | --- |
@@ -46,7 +46,7 @@ See `README.md` for the full table.
 
 ---
 
-## Study resources (this milestone)
+## Study resources (PR 05)
 
 A *resource* is one uploaded study file: a PDF, a PNG/JPEG scan of handwritten
 notes, or a plain-text/Markdown note. Every response is scoped to what the
@@ -254,13 +254,143 @@ request), then the storage object is removed, then the metadata row.
 
 ---
 
+## Private room invitations and the member roster (PR 07)
+
+An invitation is **addressed**, not a link: the owner names a student by their
+SdyRoom alias, and only that student can see or act on it. There is no token,
+no public invite URL and no "whoever holds the link" surface — knowing an
+invitation id grants nothing, because every transition re-derives `auth.uid()`
+inside the RPC and compares it to `invitee_id`. The recipient's view is the
+inbox at `/invitations` (`GET /api/invitations`); the owner's view is the
+invite panel inside the private room's workspace.
+
+Invitations exist for **private rooms only** (a public room is joinable by
+anyone, so an invitation there is refused with `409 room_public`), and only
+the room's owner may create or revoke one.
+
+### Invitation shape
+
+```json
+{
+  "id": "5f0e4a12-…",
+  "room_id": "0a9c3d77-…",
+  "room_name": "Physics 101",
+  "inviter_alias": "e2e-owner-alias",
+  "invitee_alias": "e2e-member-alias",
+  "status": "pending",
+  "created_at": "2026-10-07T11:04:52.120+00:00",
+  "expires_at": "2026-10-14T11:04:52.120+00:00",
+  "resolved_at": null,
+  "expired": false
+}
+```
+
+| Field | Rules |
+| --- | --- |
+| `id` | UUID, generated server-side; possession of it proves nothing on its own |
+| `status` | `pending` ⇔ `resolved_at IS NULL`; terminal states `accepted` / `rejected` / `revoked` carry `resolved_at`. There is **no stored `expired` state** |
+| `expires_at` | `created_at + ttl_hours`, `ttl_hours` 1–168 (default 168); checked at read time — an expired pending row answers `410 expired` and is never written |
+| `expired` | Derived by the reader (`pending` and past `expires_at`), mirroring the database's read-time evaluation |
+| `inviter_alias` / `invitee_alias` / `room_name` | Denormalised display copies (the two parties cannot read each other's profile or the private room row) |
+| — | Responses never carry `inviter_id`, `invitee_id` or any email; no token field exists |
+
+At most **one pending invitation per (room, invitee)** — a partial unique
+index absorbs the create race, and the loser is answered `409
+already_invited`. A resolved row never blocks a fresh invite later.
+
+### `POST /api/rooms/[id]/invitations`
+
+Owner only. Body `{ "invitee_alias": string, "ttl_hours"?: 1–168 }`
+(`.strict()` — an unknown field such as `invitee_id` is a `400` that names
+it). The alias is resolved inside the RPC.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 201 | — | `{ "invitation": Invitation }` |
+| 400 | `validation` / `invalid_json` / `invalid_request` | Bad id, bad body, unknown field |
+| 401 | `unauthenticated` | No session |
+| 403 | `not_owner` | Member of the room, not its owner |
+| 404 | `not_found` | Missing room, or private-from-outside (indistinguishable) |
+| 404 | `invitee_not_found` | No student with that alias |
+| 409 | `room_public` | Invitations are for private rooms only |
+| 409 | `self_invite` | The owner invited themselves |
+| 409 | `already_member` | The alias already has a seat |
+| 409 | `already_invited` | A pending invitation for this (room, invitee) exists |
+| 500 | `invitation_create_failed` | |
+
+### `GET /api/rooms/[id]/invitations`
+
+Owner only; newest first. RLS narrows rows to the caller's own, and the
+owner gate runs first so a plain member gets `403` instead of an empty list.
+
+`200 { "invitations": [Invitation] }` · `401` · `403 not_owner` · `404` ·
+`500 invitations_failed`.
+
+### `DELETE /api/rooms/[id]/invitations/[invitationId]`
+
+Owner only → `200 { "revoked": true }`. The RPC re-proves inviter *and*
+current owner, locks the row and refuses anything already resolved: an
+accepted invitation is no longer an invitation, so it answers `404` — as does
+a repeat revoke of the same row, with no way to tell the two apart.
+
+`400` (either id not a UUID) · `401` · `403 not_owner` · `404 not_found` ·
+`500 invitation_revoke_failed`.
+
+### `GET /api/invitations`
+
+The caller's inbox (rows where they are the invitee), newest first.
+`200 { "invitations": [Invitation] }` · `401` · `500 invitations_failed`.
+
+### `POST /api/invitations/[id]/accept`
+
+Session-only; the body, if any, must be empty (`400 invalid_request` if it
+carries fields). Identity comes from the session — the id in the path is the
+only argument. One RPC decides everything in one transaction: status gate,
+read-time expiry, capacity through the shared join core (the private-room
+gate opened only after a pending invitee row is proved), then the flip to
+accepted.
+
+| Status | Body |
+| --- | --- |
+| 201 | `{ "membership": "joined", "room_id", "room_name", "member_count" }` |
+| 200 | `{ "membership": "already_member", … }` — idempotent repeat; the invitation is still consumed |
+| 400 | `validation` (id not a UUID) / `invalid_request` (non-empty body) |
+| 401 | `unauthenticated` |
+| 404 | `not_found` — missing, not addressed to the caller, or revoked: all identical |
+| 409 | `used` / `rejected` / `revoked` / `room_full` / `room_closed` |
+| 410 | `expired` — no row is written |
+| 500 | `invitation_accept_failed` |
+
+### `POST /api/invitations/[id]/reject`
+
+Same shape; flips a pending row to `rejected` in place (history is kept, the
+seat is not taken). `200 { "rejected": true }` · `400` · `401` · `404` ·
+`409 used` (already accepted) / `409 rejected` (already rejected) · `410
+expired` · `500 invitation_reject_failed`.
+
+### `GET /api/rooms/[id]/members`
+
+Member only — `requireRoomMembership` first, then the `room_roster` RPC
+re-checks membership inside its own transaction, so a non-member gets the
+same `404` as a missing room. Returns display alias, role and join time
+only: **no user ids, no emails, and no live presence** (presence is PR 06's
+ephemeral channel; the roster annotates rows client-side from it).
+
+`200 { "members": [{ "alias", "role", "joined_at" }], "count": n }` ·
+`400 validation` · `401` · `404 not_found` · `500 members_failed`.
+
+---
+
 ## Not implemented, on purpose
 
 | Concern | Status |
 | --- | --- |
-| Rate limiting | **Not implemented.** No rate limiter exists anywhere in this app yet; adding one only for uploads would be inconsistent. Listed as a known limitation in `docs/SECURITY.md`. |
+| Rate limiting | **Not implemented.** No rate limiter exists anywhere in this app yet; adding one only for uploads would be inconsistent. Listed as a known limitation in `docs/SECURITY.md`. Invitation creation is bounded in the meantime by the one-pending-per-(room, invitee) index and the 1–168 h TTL bounds. |
 | Malware scanning | **Not implemented and not claimed.** Only signature/UTF-8 validation runs. |
 | Metadata editing (`PATCH`) | Not exposed. The `UPDATE` grant and policy exist and are exercised by the integration suite so the column set is provably narrow; no UI or endpoint needs renaming yet. |
 | Public/permanent file URLs | Never. Only short-lived signed URLs. |
 | Service-role usage at runtime | None. Every request runs on the cookie-scoped, user-privileged Supabase client. |
+| Bearer invite links / `/invite/[token]` | **Superseded, not built.** PR 07's spec called for a single-use token URL; the shipped design addresses invitations to an alias instead (no token exists to leak, forward or enumerate). See the reconciliation in `docs/prs/PR-07-private-invitations.md`. |
+| Inviting by email / phone / any contact data | **Never.** The app collects no contact data; delivery is the inbox itself. Revisit with PR 11 if product wants notifications. |
+| Invitations to public rooms | Refused (`409 room_public`): `join_room` already handles public entry. |
 | AI summaries / quizzes | Explicitly out of scope for this milestone. |

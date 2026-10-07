@@ -1,8 +1,48 @@
 # PR 07 — Private room invitations and the member roster
 
-**Status:** specification only — no GitHub PR exists.
+**Status:** reconciled and implemented — [PR #7](https://github.com/chanukyareddygopala07/sdyroom/pull/7),
+in review. The bearer-link design specified below is **superseded** by addressed
+alias invitations; every deliberate difference is recorded in
+[Reconciliation](#reconciliation-with-the-shipped-implementation-pr-07) before
+anything else in this document is read.
 **Owner:** Dev B (Cursor) · **Complexity:** Medium–Large · **Migration:** `0007_room_invitations.sql`
-**Depends on:** PR 06 (serialized: both edit `app/(app)/rooms/[id]/page.tsx` and `components/chat-panel.tsx`)
+**Depends on:** PR 06 (serialized: both edit `app/(app)/rooms/[id]/page.tsx` and `components/chat-panel.tsx`) — **merged** (`91d2bed`)
+
+---
+
+### Reconciliation with the shipped implementation (PR 07)
+
+The task prompt for this PR overrode this spec's bearer-link model with
+**invitations addressed to a student's alias**. This table is the contract
+between the document below and what was actually built; where they disagree,
+this table wins.
+
+| # | This spec said | Shipped as |
+| --- | --- | --- |
+| 1 | Single-use hashed bearer token (`token_hash`), `POST /api/invitations/accept { token }`, `GET /api/invitations/[token]`, a public `/invite/[token]` page with a signed-out room summary, a copyable link with a "Copied" state | **No token, hash, URL or invite page exists.** The owner names an alias (`POST /api/rooms/[id]/invitations` body `{ invitee_alias, ttl_hours? }`); the invitee's surface is the inbox `GET /api/invitations` at `/invitations` with Accept / Reject buttons; accept/reject take the invitation id in the path with an empty body |
+| 2 | A signed-out holder of a valid link sees room name + inviter alias | **No signed-out surface at all.** Rows are readable only by their invitee or their inviter (`room_invitations_select_addressed`); an invitation id proves nothing without the session that matches `invitee_id` |
+| 3 | Statuses `pending \| accepted \| revoked \| expired` (+ `rejected`), expiry derived as `created_at + ttl < now()` | Statuses `pending \| accepted \| rejected \| revoked` — **no stored `expired` state.** Expiry is checked at read time (`410 expired`, no write), the same evaluation focus sessions apply to deadlines; `resolved_at` is the single terminal timestamp (`pending ⇔ resolved_at is null`) |
+| 4 | RLS write policies (`insert_owner`, `update_own`, `delete_own`) with column-scoped `INSERT`/`UPDATE`/`DELETE` grants | **No write grant at all.** The table is `SELECT`-only for clients (whole-table grant: the policy references the id columns, and Postgres checks privileges on every column a query touches — neither id ever leaves the API). Create, accept, reject and revoke are `SECURITY DEFINER` RPCs, so an invalid transition cannot be attempted through PostgREST even before a policy runs |
+| 5 | `accept_room_invite(p_token)` / `reject_room_invite(p_token)` | `create_room_invitation(room, alias, ttl)`, `accept_room_invitation(id)`, `reject_room_invitation(id)`, `revoke_room_invitation(room, id)` — each re-derives `auth.uid()` and compares it to `invitee_id` (or re-proves the room owner), locking the row `for update` first |
+| 6 | Accepted risk: "a bearer link forwarded to a third party lets that third party in once" | **Superseded, not mitigated** — there is nothing to forward. The spec's optional `invitee_alias` binding stretch became the addressing mechanism itself |
+| 7 | `201 { invitation: { id, token, url, expires_at } }`, readable once | `201 { invitation: Invitation }` — the full shaped view (aliases, room name, status, timestamps, derived `expired`), readable again by the owner's list and the invitee's inbox; no secret to show once |
+| 8 | Accept: `201 joined` / `200 already_member`; errors `404`, `410 expired`, `409 used\|revoked\|rejected` | Same, plus acceptance seats through the shared join core, so `409 room_full` / `room_closed` also apply; create adds `409 room_public` / `self_invite` / `already_member` / `already_invited` (the one-pending partial unique index absorbs the create race) |
+| 9 | — (not specified) | The reject RPC returns `{ code: 'ok' }` on success — deliberately distinct from the `rejected` failure code, so a 200 can never be confused with a 409 (the collision is called out in the migration) |
+| 10 | Roster: either `room_roster(p_room_id)` RPC **or** a wider `room_members` SELECT policy, noting the policy option would require changing `membership-and-rls.test.ts` | **Option A taken:** `room_roster(uuid)` re-checks membership inside its own transaction. `room_members` grants and policies are byte-identical to before, so `membership-and-rls.test.ts` needed **no** expectation change (spec alternative not taken) |
+| 11 | "Must not change `join_room`" | Signature, ACL and external behaviour are identical; the 0002 body was lifted verbatim into `join_room_core(p_room_id, p_user_id, p_allow_private)` and `join_room` became a one-line wrapper passing `auth.uid(), false`. The core's `EXECUTE` is revoked from every application role, so `p_allow_private` is unreachable from a client — only the invitation path, after proving a pending invitee row, can open it |
+| 12 | Realtime: none required; roster refreshes on `router.refresh()` after accept/leave | Still a page read — plus roster rows are annotated client-side from PR 06's presence store (`lib/chat/presence-store.ts`, published by `RoomChat`), so "who is here" rides the existing channel without a roster subscription |
+| 13 | E2E: open the link signed-out → sign in → accept | Adapted to the addressed flow: owner invites by alias from the workspace panel, the invitee accepts from `/invitations` in a second context; plus stranger negatives, reject/revoke/expiry, a full room (`409 room_full` → "This room is full."), and the roster with live presence |
+
+Kept unchanged from this spec: TTL bounds (1–168 h, default 168), owner-only
+creation, private rooms only, capacity enforced through the authoritative
+path, roster-as-RPC, the `404` indistinguishability rule, no user ids or
+emails in any response, no email/phone/contact invitations, no rate limits
+(PR 10), and the entire out-of-scope list.
+
+The acceptance criteria below that speak of links, tokens or a signed-out
+visitor are superseded by rows 1–2; their addressed equivalents are covered by
+`tests/integration/room-invitations.test.ts` (37) and
+`tests/e2e/invitations.spec.ts` (4).
 
 ---
 
@@ -292,17 +332,27 @@ docs/API_CONTRACTS.md, docs/SECURITY.md, docs/local-supabase.md, docs/milestones
 
 ### Definition of Done
 
-1. `npx supabase db reset` from scratch applies `0007` cleanly; grants/policy
-   probes pass (`token_hash` unselectable, non-owner insert denied).
-2. Unit, integration and e2e suites green in CI (all three jobs).
-3. `docs/API_CONTRACTS.md` gains the invitation + roster sections;
-   `docs/SECURITY.md` gains invite threat-model rows (including the bearer-link
-   accepted risk); `docs/local-supabase.md` gains table/grants/policy rows.
-4. `docs/milestones.md` updated (row + the "No member lists, invites" bullet
-   removed and replaced by what is now true).
-5. The roster visibility change is called out explicitly in the PR description
-   with the updated integration assertion.
-6. Reviewed by Dev A.
+1. [x] `npx supabase db reset` from scratch applies `0007` cleanly; grants/policy
+   probes pass — no write grant on `room_invitations` (direct insert → `42501`),
+   `room_invitations_select_addressed` scoped to inviter/invitee,
+   `join_room_core` executable by no application role. *(No `token_hash`
+   exists — reconciliation row 1.)*
+2. [ ] Unit, integration and e2e suites green in CI (all three jobs).
+   *(Green locally: lint 0, tsc 0, 607 unit / 193 integration / 26 e2e,
+   build, `db lint`, fresh `db reset`; CI runs on the PR.)*
+3. [x] `docs/API_CONTRACTS.md` gains the invitation + roster sections;
+   `docs/SECURITY.md` gains invite threat-model rows (the bearer-link accepted
+   risk is recorded as *superseded*, not mitigated); `docs/local-supabase.md`
+   gains table/grant/policy/RPC rows and verification counts (8 tables,
+   21 policies).
+4. [x] `docs/milestones.md` updated (row added, the "No member lists, invites"
+   bullet replaced by what is now true).
+5. [x] The roster visibility question is called out explicitly in the PR
+   description: **no visibility change was needed** — `room_roster` was chosen,
+   `room_members` grants/policies are unchanged, and
+   `membership-and-rls.test.ts` therefore keeps its original assertion
+   (reconciliation row 10).
+6. [ ] Reviewed by Dev A.
 
 ### Owner
 
