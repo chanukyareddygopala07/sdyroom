@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { FocusTimer } from "@/components/focus-timer";
+import { studyingSnapshot } from "@/lib/focus/studying-store";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -156,6 +157,21 @@ describe("FocusTimer", () => {
 
     expect(screen.getByText("1:30")).toBeInTheDocument();
     expect(screen.getByText(/1500 min session|25 min session/)).toBeInTheDocument();
+  });
+
+  it("publishes the studying flag presence reports about the viewer", () => {
+    const active = renderTimer();
+    // A running session means the room is studying — that is the flag
+    // RoomChat tracks about the viewer.
+    expect(studyingSnapshot()).toBe(true);
+    active.unmount();
+    // An unmounting timer (a room switch) must never leave it behind.
+    expect(studyingSnapshot()).toBe(false);
+
+    const idle = renderTimer({ initialSession: null });
+    expect(studyingSnapshot()).toBe(false);
+    idle.unmount();
+    expect(studyingSnapshot()).toBe(false);
   });
 
   it("never shows more time than the session was granted, even when the clock lags", () => {

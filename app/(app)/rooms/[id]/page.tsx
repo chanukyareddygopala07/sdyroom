@@ -116,7 +116,11 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
         )}
       </header>
 
+      {/* Keyed per room like the chat below: the timer owns the session
+          snapshot and the `studying` flag presence reports, and neither may
+          survive a room switch while the new room's request is in flight. */}
       <FocusTimer
+        key={room.id}
         roomId={room.id}
         roomName={room.name}
         initialSession={workspace.session}
