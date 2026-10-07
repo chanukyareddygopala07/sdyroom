@@ -463,9 +463,10 @@ docs/local-supabase.md, docs/milestones.md, docs/PR_ROADMAP.md, README.md
 - [x] Blocks are private to the blocker and filter that user's messages.
 - [x] Chat remains append-only for normal members; the chosen message-removal
       semantics (soft-hide vs none) match the migration.
-- [ ] All three suites + build green locally and in CI. *(locally green: lint,
-      types, 710 unit, build, fresh `db reset` + `db lint`, 240 integration,
-      33 e2e; CI runs on the PR)*
+- [x] All three suites + build green locally and in CI. *(local: lint, types,
+      710 unit, build, fresh `db reset` + `db lint`, 240 integration, 33 e2e;
+      CI: quality 1m13s, integration 3m14s, e2e 8m1s on
+      [run 37681784146](https://github.com/chanukyareddygopala07/sdyroom/actions/runs/37681784146))*
 
 ### Definition of Done
 
@@ -474,7 +475,7 @@ docs/local-supabase.md, docs/milestones.md, docs/PR_ROADMAP.md, README.md
    `reporter_id` in moderator payloads).
 2. [x] The "Blocking semantics" and "Message removal" decisions are stated in the PR
    description with their rationale — not left implicit.
-3. [ ] CI green on all three jobs.
+3. [x] CI green on all three jobs.
 4. [x] `docs/SECURITY.md` gains a moderation section (reporter privacy is the key
    row); `docs/local-supabase.md` tables/grants/RLS updated;
    `docs/milestones.md` "No presence, typing indicators, chat moderation…"
