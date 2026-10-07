@@ -85,7 +85,7 @@ first place a secret enters the project.
 | -- | --- | --- | --- | --- | --- | -- | --- |
 | 06 | Realtime room presence | [`PR-06`](prs/PR-06-room-presence.md) | A (OpenCode) | merged main | `0006` | Medium | Merged — [PR #6](https://github.com/chanukyareddygopala07/sdyroom/pull/6) (`91d2bed`) |
 | 07 | Private room invitations + roster | [`PR-07`](prs/PR-07-private-invitations.md) | B (Cursor) | 06 | `0007` | Medium–Large | Merged — [PR #7](https://github.com/chanukyareddygopala07/sdyroom/pull/7) (`b4e1f33`) |
-| 08 | Room management (edit / close / delete) | [`PR-08`](prs/PR-08-room-management.md) | A | 07 | `0008` | Medium | In review |
+| 08 | Room management (edit / close / delete) | [`PR-08`](prs/PR-08-room-management.md) | A | 07 | `0008` | Medium | In review — [PR #8](https://github.com/chanukyareddygopala07/sdyroom/pull/8) |
 | 09 | Moderation, reporting, blocking | [`PR-09`](prs/PR-09-moderation.md) | B | 07, chat | `0009` | Large | Pending |
 | 10 | File & upload security hardening | [`PR-10`](prs/PR-10-resource-security.md) | B | merged main (05) | `0010` | Medium–Large | Pending |
 | 11 | Notifications | [`PR-11`](prs/PR-11-notifications.md) | A | 07, 09, 19, 20 | `0011` | Medium | Pending |

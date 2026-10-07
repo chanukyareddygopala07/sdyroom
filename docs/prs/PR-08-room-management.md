@@ -1,6 +1,6 @@
 # PR 08 — Room management (edit, open/close, capacity, delete)
 
-**Status:** implemented on `feat/room-management` — in review, no GitHub PR merged yet.
+**Status:** in review — [PR #8](https://github.com/chanukyareddygopala07/sdyroom/pull/8) (`feat/room-management`).
 **Owner:** Dev A (OpenCode) · **Complexity:** Medium · **Migration:** `0008_room_management.sql`
 **Depends on:** PR 07 (roster gives the capacity floor a real "current members" to compare against; invitations must cascade on delete)
 
