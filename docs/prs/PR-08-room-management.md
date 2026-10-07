@@ -294,7 +294,7 @@ docs/API_CONTRACTS.md, docs/SECURITY.md, docs/local-supabase.md, docs/milestones
 - [x] Non-owners get identical `404`s for existing and missing rooms on settings
       and `PATCH`/`DELETE`.
 - [x] Discovery shows `Closed`.
-- [ ] All three suites + build green locally and in CI. *(locally green: lint, types, 665 unit, build, fresh `db reset` + `db lint`, 215 integration, 29 e2e; CI runs on the PR)*
+- [x] All three suites + build green locally and in CI. *(local: lint, types, 665 unit, build, fresh `db reset` + `db lint`, 215 integration, 29 e2e; CI: quality 1m8s, integration 3m46s, e2e 7m45s on [run 37659032069](https://github.com/chanukyareddygopala07/sdyroom/actions/runs/37659032069))*
 
 ### Definition of Done
 
@@ -302,7 +302,7 @@ docs/API_CONTRACTS.md, docs/SECURITY.md, docs/local-supabase.md, docs/milestones
    negative probes (`owner_id` and `visibility` not updatable).
 2. [x] The storage-cleanup asymmetry is resolved **with a passing test**, not with a
    comment.
-3. [ ] CI green on all three jobs.
+3. [x] CI green on all three jobs.
 4. [x] `docs/API_CONTRACTS.md` gains the two endpoints and the editable-field
    contract; `docs/local-supabase.md` grants/RLS tables updated (the "No
    UPDATE/DELETE on rooms" note is removed and replaced with the real rule);
