@@ -83,7 +83,7 @@ first place a secret enters the project.
 
 | PR | Feature | Spec | Owner | Depends on | Migration | Complexity | Status |
 | -- | --- | --- | --- | --- | --- | -- | --- |
-| 06 | Realtime room presence | [`PR-06`](prs/PR-06-room-presence.md) | A (OpenCode) | merged main | `0006` | Medium | In review |
+| 06 | Realtime room presence | [`PR-06`](prs/PR-06-room-presence.md) | A (OpenCode) | merged main | `0006` | Medium | In review — [PR #6](https://github.com/chanukyareddygopala07/sdyroom/pull/6) |
 | 07 | Private room invitations + roster | [`PR-07`](prs/PR-07-private-invitations.md) | B (Cursor) | 06 | `0007` | Medium–Large | Pending |
 | 08 | Room management (edit / close / delete) | [`PR-08`](prs/PR-08-room-management.md) | A | 07 | `0008` | Medium | Pending |
 | 09 | Moderation, reporting, blocking | [`PR-09`](prs/PR-09-moderation.md) | B | 07, chat | `0009` | Large | Pending |
