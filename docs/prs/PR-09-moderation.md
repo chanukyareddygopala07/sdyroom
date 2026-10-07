@@ -1,6 +1,6 @@
 # PR 09 — Moderation, reporting and blocking
 
-**Status:** implemented on `feat/moderation-safety` — in review, no GitHub PR merged yet.
+**Status:** in review — [PR #9](https://github.com/chanukyareddygopala07/sdyroom/pull/9) (`feat/moderation-safety`).
 **Owner:** Dev B (Cursor) · **Complexity:** Large · **Migration:** `0009_moderation.sql`
 **Depends on:** PR 07 (member roster — you can only moderate people you can see), PR 08 (merged), chat (merged)
 

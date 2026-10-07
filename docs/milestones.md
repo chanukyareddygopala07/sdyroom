@@ -16,7 +16,8 @@ Working log: what has landed, what each milestone still owes.
 | Room presence — `0006_realtime_private_channels.sql`, private-channel policies, roster UI and `studying` flag | `91d2bed` (PR #6) | done |
 | I — private notes and PDF sharing: `0005_study_resources.sql`, private storage bucket, resource APIs, personal/room library | `4880163` (PR #5) | done |
 | Private room invitations + member roster — `0007_room_invitations.sql`, addressed invitations, invite inbox, owner invite panel, `room_roster` RPC | `b4e1f33` (PR #7) | done |
-| Room management — `0008_room_management.sql` (`update_room` / `delete_room` RPCs, room-owner storage sweep policy), owner-only settings page, `PATCH`/`DELETE /api/rooms/[id]`, type-the-name delete confirmation | `feat/room-management` | in review (PR #8) |
+| Room management — `0008_room_management.sql` (`update_room` / `delete_room` RPCs, room-owner storage sweep policy), owner-only settings page, `PATCH`/`DELETE /api/rooms/[id]`, type-the-name delete confirmation | `61a99a0` (PR #8) | done |
+| Member safety — `0009_moderation.sql` (reports, one-way blocks, mutes enforced by the insert policy, member removal, owner-appointed moderators, audit trail), moderation inbox, shared report dialog, roster action menu | `feat/moderation-safety` | in review (PR #9) |
 
 ## Milestone D — task breakdown
 
