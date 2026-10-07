@@ -1,8 +1,25 @@
 # PR 08 — Room management (edit, open/close, capacity, delete)
 
-**Status:** specification only — no GitHub PR exists.
+**Status:** implemented on `feat/room-management` — in review, no GitHub PR merged yet.
 **Owner:** Dev A (OpenCode) · **Complexity:** Medium · **Migration:** `0008_room_management.sql`
 **Depends on:** PR 07 (roster gives the capacity floor a real "current members" to compare against; invitations must cascade on delete)
+
+#### Reconciliation (as implemented)
+
+| Spec said | What shipped | Why |
+| --- | --- | --- |
+| Column-scoped `grant update (name, shared_goal, exam_track, subject, language, capacity, status)` + `grant delete` on `rooms`, with `rooms_update_own` / `rooms_delete_own` policies | **No grants, no policies on `rooms` at all** — writes only via `update_room` / `delete_room` SECURITY DEFINER RPCs | `tests/integration/membership-and-rls.test.ts` freezes "an owner cannot `update`/`delete` their own room (no grant → `42501`, not zero rows)". Grants would have broken a frozen test that this PR is not allowed to weaken; prompt §7 asks for narrowly scoped RPCs instead. The RPCs deliver the same checks *under the room-row lock*, which RLS never could. Defense in depth is proven by the control test: widening the grant in a rolled-back transaction still yields `update … 0 rows` (RLS, no policy). |
+| Delete step 3: read `storage_path`s from `study_resources`, remove with `removeResourceObject` | Route calls `removeRoomStorageObjects`: **storage-first folder sweep** (`list rooms/{id}` → each uploader folder → chunked `remove`) *before* `delete_room` | Same ordering the spec demands, but listing the folder is one authoritative query that cannot miss a row whose insert raced the read, and it works only because of the policy below. |
+| Risk table: owner cannot delete a student's object → prefer "unreachable object + `cleanup_failed`" over widening the storage policy | **Widened the storage policy narrowly**: 0008 adds `study_resources_objects_delete_room_owner` — `delete` allowed iff the object key matches a `study_resources.storage_path` row in a room `auth.uid()` **owns** (OR'd with the uploader-only `0005` policy) | The fallback would have made *every* room with member uploads undeletable (`500 cleanup_failed` forever), not just dirty. The new policy grants room owners exactly one new verb on exactly the objects of rooms they already own, proven by the integration test: owner removes member's object → gone; stranger's remove → unchanged; uploader still can. |
+| `update_room(p_room_id, …editable fields…)` named parameters | `update_room(p_room_id uuid, p_changes jsonb)` with a fixed whitelist `set` list | One signature carries "absent key = unchanged, `null` = clear" faithfully through PostgREST, and unknown keys are structurally ignored rather than rejected per-parameter. Validation still runs in SQL (status/capacity) as well as in Zod. |
+| Capacity floor + ownership under one lock | Implemented exactly so: `select … for update` on the room row, owner from `auth.uid()`, floor check against `room_members`, `capacity_below_membership` envelope with the count | The spec's own justification; live race test asserts the XOR outcome (shrink succeeds ⇒ join gets `room_full`, join succeeds ⇒ shrink gets `409`) and the end-state invariant `capacity ≥ members`. |
+| Settings page and routes rely on `owner_id = auth.uid()` row comparison | Owner gate via `requireRoomOwner` (403 member / 404 non-member) *and* the RPC re-proving `auth.uid()`, *and* `getOwnedRoom` (role row) for the page | Same semantics, one extra read-layer gate so the page never renders owner controls to a member — the API refusals are the security, the page refusals are honesty. |
+| DoD 4: local-supabase "No UPDATE/DELETE on rooms" note removed | Rewritten to state the RPC-only rule and the probes | Done in `docs/local-supabase.md`. |
+
+Known residual (documented in the route docblock and `docs/API_CONTRACTS.md`):
+storage is not transactional with Postgres, so an object whose listing the sweep
+already passed but whose row commits before `delete_room` is orphaned —
+unreachable in a private bucket, bounded by two adjacent calls.
 
 ---
 
@@ -267,32 +284,32 @@ docs/API_CONTRACTS.md, docs/SECURITY.md, docs/local-supabase.md, docs/milestones
 
 ### Acceptance criteria
 
-- [ ] Owner can edit every listed field and nothing else; `visibility` and
+- [x] Owner can edit every listed field and nothing else; `visibility` and
       `owner_id` are refused by the column grant, not just by validation.
-- [ ] Capacity cannot be set below the current member count; the error names the
+- [x] Capacity cannot be set below the current member count; the error names the
       constraint.
-- [ ] Closing a room stops new joins without affecting existing members.
-- [ ] Deleting removes the room **and** every dependent row, and the storage
+- [x] Closing a room stops new joins without affecting existing members.
+- [x] Deleting removes the room **and** every dependent row, and the storage
       decision from "Storage work" is proven by a test.
-- [ ] Non-owners get identical `404`s for existing and missing rooms on settings
+- [x] Non-owners get identical `404`s for existing and missing rooms on settings
       and `PATCH`/`DELETE`.
-- [ ] Discovery shows `Closed`.
-- [ ] All three suites + build green locally and in CI.
+- [x] Discovery shows `Closed`.
+- [ ] All three suites + build green locally and in CI. *(locally green: lint, types, 665 unit, build, fresh `db reset` + `db lint`, 215 integration, 29 e2e; CI runs on the PR)*
 
 ### Definition of Done
 
-1. `npx supabase db reset` from scratch; grant/policy probes pass, including the
+1. [x] `npx supabase db reset` from scratch; grant/policy probes pass, including the
    negative probes (`owner_id` and `visibility` not updatable).
-2. The storage-cleanup asymmetry is resolved **with a passing test**, not with a
+2. [x] The storage-cleanup asymmetry is resolved **with a passing test**, not with a
    comment.
-3. CI green on all three jobs.
-4. `docs/API_CONTRACTS.md` gains the two endpoints and the editable-field
+3. [ ] CI green on all three jobs.
+4. [x] `docs/API_CONTRACTS.md` gains the two endpoints and the editable-field
    contract; `docs/local-supabase.md` grants/RLS tables updated (the "No
    UPDATE/DELETE on rooms" note is removed and replaced with the real rule);
    `docs/milestones.md` "No room editing or deletion" bullet replaced.
-5. Ownership transfer and visibility change recorded as explicit follow-ups
+5. [x] Ownership transfer and visibility change recorded as explicit follow-ups
    (either a `docs/prs/` stub or a bullet in `docs/milestones.md`).
-6. Reviewed by Dev B.
+6. [ ] Reviewed by Dev B.
 
 ### Owner
 

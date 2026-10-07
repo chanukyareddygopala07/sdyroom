@@ -65,6 +65,43 @@ The spec's bearer-link model and its accepted risk ("a forwarded link lets a
 third party in once") are **superseded**, not mitigated — see the
 reconciliation in `docs/prs/PR-07-private-invitations.md`.
 
+## Room management: what makes a write "owner only"
+
+Room editing and deletion (`0008`) are the first flows where the product needs
+a write the schema never granted, so they state the rule explicitly:
+
+- **No `UPDATE`/`DELETE` grant on `rooms`, ever.** Every mutation travels
+  through SECURITY DEFINER RPCs (`update_room`, `delete_room`) whose execute
+  privilege is `authenticated`-only. A direct PostgREST write fails with `42501`
+  before RLS is even consulted — proven in
+  `tests/integration/room-management.test.ts` for both an authenticated owner
+  and `anon`, together with the `has_table_privilege` freeze (`f` for both
+  roles, both verbs).
+- **Ownership is re-proven from `auth.uid()` inside the RPC**, under the same
+  room-row lock `join_room` takes — the request body cannot carry an identity,
+  and the capacity floor (`capacity >= current members`) is checked in the same
+  transaction as the update, so a shrink cannot race a join. The control test
+  widens the `UPDATE` grant *in a rolled-back transaction* and still observes
+  `update … = 0 rows`: even with layer one removed, RLS (no update policy)
+  filters the row — and the script proves the grant returns to `f` afterwards.
+- **Three independent refusals for immutable fields.** `owner_id`,
+  `visibility`, `id`, `created_at`, `updated_at` are unknown keys to the strict
+  Zod schema (`400 validation` naming the key), absent from the RPC's fixed
+  `set` whitelist, and ungranted at the column level.
+- **`404` parity.** The settings page (`getOwnedRoom`) and both routes answer
+  a non-member and a missing room with the identical `404`, so neither the
+  page URL nor the API is an existence oracle; a member who is not the owner
+  gets `403 not_owner` on the API and the same `404` on the page.
+- **Deletion is objects-first.** The route sweeps `rooms/{room}/**` before
+  `delete_room` cascades the rows, using the `0008`
+  `study_resources_objects_delete_room_owner` storage policy (OR'd with the
+  uploader-only policy): the owner can remove member-uploaded objects of a
+  room they own, and nobody else gains anything — the integration test has a
+  stranger's remove change nothing. Order matters because the storage policies
+  authorize *against the rows*: rows-first would strand objects with no
+  metadata left to authorize their cleanup. A sweep failure returns
+  `500 cleanup_failed` with the room fully intact.
+
 ## Study resources: where the rules live
 
 | Layer | File | Rule |
@@ -89,9 +126,9 @@ Two details worth restating because they are easy to lose:
 
 | Suite | Command | What it pins down |
 | --- | --- | --- |
-| Unit | `npm test` | Validators, path building and ownership parsing, query scoping, every route's status/code matrix including the error branches, upload form and library UI behaviour, the invitation validators and all six invitation/roster routes, and the presence store |
-| Integration | `npm run test:integration` | Against the real local stack with real auth users: `tests/integration/study-resources.test.ts` (22) — privacy of columns and rows, anonymous listing, signed-URL reachability with its 300 s TTL and refusal without a signature, cross-user open/delete refusal, member read, non-member 404, **revocation on leaving**, `owner_id` rejection, impersonation of another student's folder (row *and* object), impersonation of the signed path, magic-byte mismatch, bucket privacy, `owner_id` grants, and the key-layout CHECK; `tests/integration/room-invitations.test.ts` (37) — invitation RLS and grant freezes, non-owner create refusal, alias addressing, every transition (accept/reject/revoke/expiry), the accept race against the last seat, roster denial for non-members, and policy/grant checksums |
-| Browser | `npm run test:e2e` | `tests/e2e/resources.spec.ts` (5) — upload through the real form, private library, room sharing and delete in Chromium; `tests/e2e/invitations.spec.ts` (4) — the invitation lifecycle in two real browsers (invite → inbox → accept, negatives for a stranger, rejection/revocation/expiry, and a full room) plus live presence annotation on the roster |
+| Unit | `npm test` | Validators, path building and ownership parsing, query scoping, every route's status/code matrix including the error branches, upload form and library UI behaviour, the invitation validators and all six invitation/roster routes, the room `PATCH`/`DELETE` routes and their owner-gate mapping, the settings and delete-danger components, and the presence store |
+| Integration | `npm run test:integration` | Against the real local stack with real auth users: `tests/integration/study-resources.test.ts` (22) — privacy of columns and rows, anonymous listing, signed-URL reachability with its 300 s TTL and refusal without a signature, cross-user open/delete refusal, member read, non-member 404, **revocation on leaving**, `owner_id` rejection, impersonation of another student's folder (row *and* object), impersonation of the signed path, magic-byte mismatch, bucket privacy, `owner_id` grants, and the key-layout CHECK; `tests/integration/room-invitations.test.ts` (37) — invitation RLS and grant freezes, non-owner create refusal, alias addressing, every transition (accept/reject/revoke/expiry), the accept race against the last seat, roster denial for non-members, and policy/grant checksums; `tests/integration/room-management.test.ts` (22) — owner-gate parity for `PATCH`/`DELETE`, identity-field refusals, the capacity floor incl. a live join race, the open/close lifecycle, direct-write denial for authenticated and `anon`, the grant/function/storage-policy freezes, the in-transaction control that widens the `UPDATE` grant and still gets zero rows, and full cascade + storage-object removal on delete |
+| Browser | `npm run test:e2e` | `tests/e2e/resources.spec.ts` (5) — upload through the real form, private library, room sharing and delete in Chromium; `tests/e2e/invitations.spec.ts` (4) — the invitation lifecycle in two real browsers (invite → inbox → accept, negatives for a stranger, rejection/revocation/expiry, and a full room) plus live presence annotation on the roster; `tests/e2e/room-management.spec.ts` (3) — the owner editing settings a member can see, a non-owner bounced off the settings URL, closing a room so a new student cannot join, and a name-typed delete that 404s the member's stale workspace |
 
 CI runs all three (`.github/workflows/ci.yml`) with `permissions: contents: read`
 and no repository secrets.

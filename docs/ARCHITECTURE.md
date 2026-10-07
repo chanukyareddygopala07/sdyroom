@@ -45,7 +45,7 @@ Two rules define the codebase:
 | `lib/rooms/access.ts` | The shared membership/ownership gates (`requireRoomMembership`, `requireRoomOwner`) that give non-members the same `404` as a missing room. |
 | `lib/api/responses.ts` | The one error envelope: `{ error: { code, message, issues? } }`. |
 | `lib/supabase/` | `proxy.ts` (session refresh + page redirects), `server.ts` (cookie-scoped server client), `client.ts` (browser client). No service-role key exists in the repo. |
-| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0007` are append-only; existing files are never edited. |
+| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0008` are append-only; existing files are never edited. |
 | `tests/unit` | Vitest, no network: validators, queries against fake builders, every route's status matrix, component behaviour. |
 | `tests/integration` | Vitest against the real local stack with real auth users: RLS/grant probes, RPC races, HTTP-level handler tests. Never uses a service-role key (SQL fixtures go through `docker exec psql`). |
 | `tests/e2e` | Playwright + Chromium driving the real `next dev` app: two-browser flows, WebSocket frame capture/replay, teardown scoped to a per-run user id. |
@@ -94,6 +94,24 @@ route handler → session claims → Zod (400) → lib/ query →
 
 There is no third path: pages never write, components never call Postgres
 directly, and every failure travels through the single envelope.
+
+**A delete (room removal, the one cross-service write):**
+
+```
+DELETE /api/rooms/[id]
+  → session claims → requireRoomOwner (404 / 403 before anything is touched)
+  → sweep rooms/{id}/** out of the storage bucket   ← storage RLS authorizes against the rows, so this runs first
+  → delete_room RPC: lock room row, re-prove auth.uid(), one cascading delete
+  → { deleted: true }
+```
+
+The two halves cannot share a transaction (Storage is not Postgres), so the
+order is chosen so that every *other* failure mode converges on retry: a failed
+sweep leaves the room fully intact; a failed row delete has already removed
+objects that no row will ever advertise again. `app/(app)/rooms/[id]/settings`
+is the only page that exists purely for owner writes, and it re-proves
+ownership server-side (`getOwnedRoom`) rather than trusting the workspace's
+hidden link.
 
 ## Realtime
 

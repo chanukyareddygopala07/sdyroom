@@ -85,24 +85,28 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**` — 193 tests covering auth at the API boundary, onboarding
+  over `tests/integration/**` — 215 tests covering auth at the API boundary, onboarding
   and response privacy, RLS/grant behaviour per role, `create_room` atomicity
   (including the revoked-grant rollback), joining and capacity races, the shared focus
   timer state machine, personal-goal privacy, append-only room chat, the whole
   study-resource authorization model (private library, room sharing, revocation on
   leaving, signed URLs, impersonation of another student's folder, bucket privacy),
-  live Realtime delivery of `focus_sessions` changes over a real WebSocket, and the
+  live Realtime delivery of `focus_sessions` changes over a real WebSocket, the
   addressed-invitation lifecycle (create/accept/reject/revoke/expiry, the last-seat
-  accept race, roster denial for non-members, policy and grant freezes). It needs
+  accept race, roster denial for non-members, policy and grant freezes), and room
+  management (owner-gate parity, the capacity floor against a live join race,
+  direct-write denial with the in-transaction grant-widening control, and full
+  cascade + storage sweep on delete). It needs
   the local stack (`npx supabase start && npx supabase db reset`) and never uses a
   service-role key. `passWithNoTests` stays unset, so a missing suite still exits
   non-zero. See `tests/integration/README.md`.
-- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 26 Chromium tests
+- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 29 Chromium tests
   driving the real app (`next dev`) against the local stack: the full two-student
   workflow through the forms, private-room access, room chat, room presence across
   two browsers, the invitation lifecycle (invite by alias → inbox → accept, stranger
   negatives, reject/revoke/expiry, a full room), the upload → share →
-  revoke → delete file lifecycle through the real upload form, expiry/failure/recovery
+  revoke → delete file lifecycle through the real upload form, room settings →
+  close → name-typed delete across two browsers, expiry/failure/recovery
   scenarios, and Realtime-vs-polling proven on an intercepted WebSocket (including
   stale and duplicate frame replay). Test users are scoped to a per-run id and deleted
   by the global teardown (which also removes this run's storage objects before its
@@ -138,6 +142,7 @@ unique study alias once, then discover public rooms and create your own.
 | `/rooms` | signed in | Public room discovery with a `?q=` search over name, subject and exam track; rooms you belong to link straight into their workspace |
 | `/rooms/new` | signed in, alias chosen | Create a room via `POST /api/rooms` and enter its workspace |
 | `/invitations` | signed in | Your invitation inbox: accept or reject invitations addressed to your alias |
+| `/rooms/[id]/settings` | room owner | Rename the room, edit its details, adjust capacity, open/close it, and the type-the-name delete danger zone; `notFound()` for anyone who is not the owner |
 | `GET /api/rooms` | signed in | Shaped public rooms, `401` when unauthenticated |
 | `POST /api/profile` | signed in | Creates the profile row, `409 alias_taken` on a case-insensitive collision |
 | `POST /api/rooms` | signed in, alias chosen | `401` / `400 validation` / `403 onboarding_required` / `201` |
@@ -157,6 +162,8 @@ unique study alias once, then discover public rooms and create your own.
 | `POST /api/invitations/[id]/accept` | the invitee | Empty body; `201 joined` / `200 already_member` (the invitation is consumed either way); `404` for anything not addressed to you, `409 used` / `rejected` / `revoked` / `room_full` / `room_closed`, `410 expired` |
 | `POST /api/invitations/[id]/reject` | the invitee | Empty body → `200 { rejected: true }`; same `404` / `409` / `410` map as accept |
 | `GET /api/rooms/[id]/members` | signed in, member | `{ members: [{ alias, role, joined_at }], count }` — the roster; `404 not_found` for a non-member, and no user ids or emails in the payload |
+| `PATCH /api/rooms/[id]` | room owner | Partial edit of name / shared goal / exam track / subject / language / capacity / status → `200 { room }` (the stored row); `403 not_owner`, `404 not_found` for a non-member *and* a missing room, `409 capacity_below_membership`, `400 invalid_request` for an empty body / `validation` for a bad value or an unknown key such as `owner_id`, `401` |
+| `DELETE /api/rooms/[id]` | room owner | Sweeps `rooms/{id}/**` out of the bucket first, then cascades every dependent row → `200 { deleted: true }`; `403 not_owner`, `404 not_found` for a non-member, a missing room, or a repeat delete, `500 cleanup_failed` / `delete_failed` (room intact, retry converges) |
 | `/resources` | signed in | The personal library: upload, search and filter your own files, open them through a short-lived signed URL, delete them |
 | `GET /api/resources` | signed in | `?scope=personal` (default) or `?room_id=<uuid>`, plus `q` / `subject` / `chapter` / `limit` / `offset`; `400` for both `scope` and `room_id` or a bad value, `404` for a room you have left |
 | `POST /api/resources` | signed in | multipart upload → `201`; `400` `validation` / `invalid_request` / `invalid_filename` / `empty_file` / `malformed_file`, `413 file_too_large`, `415 unsupported_file_type`, `404` for a room you are not in, `500` `storage_upload_failed` / `metadata_failed` |

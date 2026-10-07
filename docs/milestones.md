@@ -15,7 +15,8 @@ Working log: what has landed, what each milestone still owes.
 | Room chat — `0004_room_messages.sql`, messages API, realtime wiring, workspace mount | `e0e4eb2` | done |
 | Room presence — `0006_realtime_private_channels.sql`, private-channel policies, roster UI and `studying` flag | `91d2bed` (PR #6) | done |
 | I — private notes and PDF sharing: `0005_study_resources.sql`, private storage bucket, resource APIs, personal/room library | `feat/private-notes-library` | in progress |
-| Private room invitations + member roster — `0007_room_invitations.sql`, addressed invitations, invite inbox, owner invite panel, `room_roster` RPC | `feat/private-room-invitations` | in review (PR #7) |
+| Private room invitations + member roster — `0007_room_invitations.sql`, addressed invitations, invite inbox, owner invite panel, `room_roster` RPC | `b4e1f33` (PR #7) | done |
+| Room management — `0008_room_management.sql` (`update_room` / `delete_room` RPCs, room-owner storage sweep policy), owner-only settings page, `PATCH`/`DELETE /api/rooms/[id]`, type-the-name delete confirmation | `feat/room-management` | in review |
 
 ## Milestone D — task breakdown
 
@@ -445,9 +446,15 @@ Working log: what has landed, what each milestone still owes.
   an invitation never makes it public. Email/phone invitations and invite links
   are deliberately not built (the app collects no contact data); room
   moderation of members (kicking, transfer) is PR 09.
-- **No room editing or deletion.** `rooms` has no `UPDATE`/`DELETE` grant, so a room
-  can be created, discovered, joined and left — but not renamed, closed from the UI,
-  or removed.
+- **Room editing and deletion are owner-only (PR 08).** The mutable fields
+  (name, shared goal, exam track, subject, language, capacity, open/closed
+  status) are edited through `PATCH /api/rooms/[id]` and deleted through
+  `DELETE /api/rooms/[id]` — both RPC-backed, both impossible via direct
+  PostgREST (`rooms` still has no `UPDATE`/`DELETE` grant). Capacity can never
+  go below the current member count, deletion sweeps the room's storage objects
+  first and cascades every dependent row, and `visibility` / ownership remain
+  unchangeable. Ownership transfer and visibility changes are explicit
+  follow-ups.
 - **No alias editing.** Changing the study alias after onboarding is not built.
 - **No typing indicators, chat moderation or file previews.** Chat is
   append-only history (no edit, delete or react); room presence shows who is
