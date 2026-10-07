@@ -13,6 +13,7 @@ Working log: what has landed, what each milestone still owes.
 | G — shared study workspace, synchronized focus timers and personal goals | `1937e16` | done |
 | H — browser end-to-end suite and realtime reliability | `9a98a4a`–`ebcc16e` | done |
 | Room chat — `0004_room_messages.sql`, messages API, realtime wiring, workspace mount | `e0e4eb2` | done |
+| Room presence — `0006_realtime_private_channels.sql`, private-channel policies, roster UI and `studying` flag | `feat/room-presence` | in progress |
 | I — private notes and PDF sharing: `0005_study_resources.sql`, private storage bucket, resource APIs, personal/room library | `feat/private-notes-library` | in progress |
 
 ## Milestone D — task breakdown
@@ -390,7 +391,8 @@ Working log: what has landed, what each milestone still owes.
   can be created, discovered, joined and left — but not renamed, closed from the UI,
   or removed.
 - **No alias editing.** Changing the study alias after onboarding is not built.
-- **No presence, typing indicators, chat moderation or file previews.** Chat is
-  append-only history (no edit, delete or react); files are downloaded rather than
-  previewed inline, with no versioning, no per-room quota UI and no search beyond
-  the title/subject/chapter filters.
+- **No typing indicators, chat moderation or file previews.** Chat is
+  append-only history (no edit, delete or react); room presence shows who is
+  in the room and whether a shared session is running (alias + flag only, no
+  ids); files are downloaded rather than previewed inline, with no versioning,
+  no per-room quota UI and no search beyond the title/subject/chapter filters.

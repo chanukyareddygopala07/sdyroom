@@ -359,12 +359,24 @@ describe("ChatPanel", () => {
         messages={[]}
         connection="live"
         onSend={vi.fn()}
-        participants={[{ alias: "Ada" }, { alias: "Grace" }]}
+        participants={[
+          { alias: "Ada", studying: false },
+          { alias: "Grace", studying: false },
+        ]}
       />,
     );
     expect(screen.getByRole("list", { name: "Participants" })).toBeInTheDocument();
     expect(screen.getByText("Ada")).toBeInTheDocument();
     expect(screen.getByText("Grace")).toBeInTheDocument();
+    // Rendered in the order the data layer supplies (own alias first).
+    const rendered = Array.from(
+      screen.getByRole("list", { name: "Participants" }).querySelectorAll("li"),
+    ).map((item) => item.textContent);
+    expect(rendered).toEqual(["Ada", "Grace"]);
+    // Without a session running there is nothing to claim: plain badges and
+    // a plain headcount.
+    expect(screen.getByText("2 here")).toBeInTheDocument();
+    expect(screen.queryByText(/studying/)).toBeNull();
 
     rerender(
       <ChatPanel
@@ -376,5 +388,31 @@ describe("ChatPanel", () => {
     );
     expect(screen.getByText("Nobody here but you")).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Participants" })).toBeNull();
+    expect(screen.queryByText(/here$/)).toBeNull();
+  });
+
+  it("marks a studying member in the badge and the header count", () => {
+    render(
+      <ChatPanel
+        messages={[]}
+        connection="live"
+        onSend={vi.fn()}
+        participants={[
+          { alias: "Ada", studying: true },
+          { alias: "Grace", studying: false },
+        ]}
+      />,
+    );
+
+    // Spelled out, not just coloured: the badge reads the same to a screen
+    // reader and to anyone who cannot separate the variants.
+    expect(screen.getByText("Ada · studying")).toBeInTheDocument();
+    expect(screen.getByText("Grace")).toBeInTheDocument();
+    expect(screen.getByText("1 studying · 2 here")).toBeInTheDocument();
+
+    // The connection badge stays a distinct, first status in the header.
+    const statuses = screen.getAllByRole("status");
+    expect(statuses[0]).toHaveTextContent("Live");
+    expect(statuses[1]).toHaveTextContent("1 studying · 2 here");
   });
 });

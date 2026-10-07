@@ -68,7 +68,10 @@ export function ChatPanel({
   onSend: (body: string) => void;
   /** Re-send a failed message; owner flips it back to `pending`. */
   onRetrySend?: (id: string) => void;
-  /** Presence only renders when the approved contract provides it. */
+  /**
+   * The observed roster, or nothing while presence has not synced yet —
+   * `undefined` keeps the section hidden rather than flashing an empty room.
+   */
   participants?: ChatParticipant[];
 }) {
   const [draft, setDraft] = useState("");
@@ -115,6 +118,17 @@ export function ChatPanel({
     draft.length <= CHAT_MESSAGE_MAX_LENGTH &&
     connection !== "unavailable";
 
+  // The header count is a second live region beside the connection badge:
+  // joins and leaves are announced without moving focus. It only appears
+  // once presence has actually been observed (a defined, non-empty list) —
+  // the section below owns the empty-room copy.
+  const totalHere = participants?.length ?? 0;
+  const studyingHere = participants?.filter((p) => p.studying).length ?? 0;
+  const countCopy =
+    studyingHere > 0
+      ? `${studyingHere} studying · ${totalHere} here`
+      : `${totalHere} here`;
+
   const sendDraft = () => {
     if (!canSend) return;
     onSend(draft.trim());
@@ -141,9 +155,16 @@ export function ChatPanel({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">Chat</h2>
-        <p role="status" className="text-xs text-muted-foreground">
-          {connectionCopy[connection]}
-        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p role="status" className="text-xs text-muted-foreground">
+            {connectionCopy[connection]}
+          </p>
+          {participants !== undefined && totalHere > 0 && (
+            <p role="status" className="text-xs text-muted-foreground">
+              {countCopy}
+            </p>
+          )}
+        </div>
       </div>
 
       {participants !== undefined && (
@@ -160,7 +181,15 @@ export function ChatPanel({
             >
               {participants.map((participant) => (
                 <li key={participant.alias}>
-                  <Badge variant="outline">{participant.alias}</Badge>
+                  {/* Studying is spelled out, not just coloured: the badge
+                      reads the same to a screen reader and to anyone who
+                      cannot separate the variants. */}
+                  <Badge
+                    variant={participant.studying ? "default" : "outline"}
+                  >
+                    {participant.alias}
+                    {participant.studying ? " · studying" : ""}
+                  </Badge>
                 </li>
               ))}
             </ul>

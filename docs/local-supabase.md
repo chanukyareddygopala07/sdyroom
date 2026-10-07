@@ -71,6 +71,9 @@ and personal goals: two tables, five RPCs, a trigger and the realtime publicatio
 two policies, realtime). `supabase/migrations/0005_study_resources.sql` adds the
 personal/room file library: one table, four table policies, a **private storage
 bucket** and three policies on `storage.objects`.
+`supabase/migrations/0006_realtime_private_channels.sql` adds no table, column or
+grant: two policies on `realtime.messages` that gate private Realtime channels
+(`room-presence-{roomId}`) to current members of the room named in the topic.
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
@@ -145,9 +148,12 @@ from `STUDY_RESOURCE_COLUMNS`, so no response ever carries it.
 | `study_resources` | `study_resources_select_own_or_member` | own rows, plus rows whose `room_id` has a `room_members` row for `auth.uid()` **right now** — leaving a room revokes read access on the next query, with no file moved or deleted |
 | `study_resources` | `study_resources_insert_own_member` | `owner_id = auth.uid()`, membership of the target room, and a `storage_path` under the caller's own folder in the matching prefix |
 | `study_resources` | `study_resources_update_own` / `delete_own` | `owner_id = auth.uid()` — a room member can read a shared file and still cannot edit or remove it |
+| `realtime.messages` | `room_presence_select_member` / `room_presence_insert_member` (`0006`) | the whole of the private-channel gate for `room-presence-{uuid}` topics: `authenticated` only, extension must be `broadcast`/`presence`, and the uuid in the topic must match a current `room_members` row for `auth.uid()` — so a non-member (or an anonymous client) cannot join, cannot confirm a private room exists, and cannot read another room's roster. Realtime's authorization probes run as the caller inside a transaction that rolls back, so nothing is ever written |
 
 Storage objects have their own three policies (next section); they are not listed
-above because they live on `storage.objects`, not on a table in `public`.
+above because they live on `storage.objects`, not on a table in `public`. The
+`realtime.messages` row **is** listed even though that table lives in the `realtime`
+schema: it carries no data of ours — it is Realtime's authorization surface.
 
 There are **no policies for `anon` on any table** (verified: 0 policies for roles other
 than `authenticated`), and anon holds no table privileges either.
@@ -293,8 +299,8 @@ All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001 … 0005
-npx supabase migration list --local # 0001 … 0005 present locally
+npx supabase db reset               # exit 0: applied 0001 … 0006
+npx supabase migration list --local # 0001 … 0006 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
@@ -302,9 +308,13 @@ Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
 - RLS enabled on all seven tables: `profiles`, `rooms`, `room_members`,
   `focus_sessions`, `study_goals`, `room_messages`, `study_resources`
   (`relrowsecurity = t`).
-- 20 policies, every one `to authenticated`; 0 policies for any other role
-  (3 storage policies on `storage.objects` for `study-resources` alongside them,
-  also `authenticated` only).
+- 20 table policies on `public.*`, every one `to authenticated`; plus the two
+  `0006` policies on `realtime.messages` (`room_presence_select_member` /
+  `room_presence_insert_member`) and the 3 storage policies on `storage.objects`
+  for `study-resources` — 0 policies for any role other than `authenticated`
+  across all of them. The presence policies are proven end to end by
+  `tests/integration/presence-policies.test.ts` (member probe accepted,
+  non-member / cross-room / anonymous / wrong-topic probes refused).
 - FKs: `rooms.owner_id`/`room_members.user_id`/`profiles.id` → `auth.users`
   `ON DELETE CASCADE`; `room_members.room_id` → `rooms` `ON DELETE CASCADE`.
 - Composite PK `(room_id, user_id)`, unique `profiles_alias_lower_key` on `lower(alias)`.

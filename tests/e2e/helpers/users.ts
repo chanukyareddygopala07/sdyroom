@@ -21,30 +21,53 @@ function runScoped(label: string): { email: string; alias: string } {
   };
 }
 
-export type E2EUser = { email: string; password: string };
+export type E2EUser = { email: string; password: string; alias?: string };
+
+/**
+ * Waits until React has attached to an element. The auth forms are
+ * controlled inputs: filling one before hydration types into a node React
+ * then resets to its initial state on commit, so the value vanishes between
+ * fill and submit and the browser's native validation reports an empty
+ * field. The `__reactProps$` marker appears the moment the element is
+ * hydrated.
+ */
+export async function waitForHydration(page: Page, selector: string): Promise<void> {
+  await page.waitForFunction((sel) => {
+    const el = document.querySelector(sel);
+    return (
+      el !== null &&
+      Object.keys(el).some((key) => key.startsWith("__reactProps$"))
+    );
+  }, selector);
+}
 
 /**
  * Signs up through the real form. The local stack auto-confirms, so the
  * session exists immediately and the app sends the user to onboarding.
  * Stops after onboarding lands them on `/rooms`.
+ * Returns the alias too — presence tests assert the roster by name, and the
+ * alias only exists here, where it is chosen.
  */
 export async function signUpAndOnboard(page: Page, label: string): Promise<E2EUser> {
   const { email, alias } = runScoped(label);
   await page.goto("/auth/sign-up");
+  await waitForHydration(page, "#email");
   await page.locator("#email").fill(email);
   await page.locator("#password").fill(E2E_PASSWORD);
   await page.locator("#repeat-password").fill(E2E_PASSWORD);
   await page.getByRole("button", { name: /sign up/i }).click();
   await page.waitForURL(/\/onboarding$/);
+  await waitForHydration(page, "#alias");
   await page.locator("#alias").fill(alias);
   await page.getByRole("button", { name: /continue to rooms/i }).click();
   await page.waitForURL(/\/rooms$/);
-  return { email, password: E2E_PASSWORD };
+  return { email, password: E2E_PASSWORD, alias };
 }
 
 /** Authenticates an already-registered user through the login form. */
 export async function login(page: Page, user: E2EUser): Promise<void> {
   await page.goto("/auth/login");
+  await waitForHydration(page, "#email");
   await page.locator("#email").fill(user.email);
   await page.locator("#password").fill(user.password);
   await page.getByRole("button", { name: /login/i }).click();

@@ -104,6 +104,12 @@ Three techniques make the realtime assertions structural rather than timing-base
 - **The countdown can lag up to one clock tick** between server reads; the timer
   clamps it to the session's duration, so a fresh 25-minute start reads `25:00`, never
   `25:01`.
+- **Controlled inputs filled before hydration get reset.** React controlled inputs
+  (onboarding, login, room forms) written with `fill()` before hydration commits are
+  wiped back to their initial state when React takes over — the browser then reports
+  `Please fill out this field` and the test hangs. `waitForHydration()`
+  (helpers/users.ts) waits for the element's `__reactProps$` key before filling; every
+  form-fill helper goes through it.
 
 ## Files
 
@@ -114,8 +120,9 @@ Three techniques make the realtime assertions structural rather than timing-base
 | `access-expiry.spec.ts` | Signed-out redirects, indistinguishable 404s, full/closed rooms, owner-only controls, API abort + retry surfacing in the UI, an expired deadline recorded by a read, and session loss clearing access |
 | `realtime.spec.ts` | A start reaches the member over WebSocket without a reload (frame + poll-phase proof), a dropped socket reports `Reconnecting…` and recovers, and stale/duplicate injected frames cannot corrupt the view |
 | `chat.spec.ts` | Chat history seeded into the workspace, a message sent through the real form appearing for the member over realtime, and the connection badge staying honest offline |
+| `presence.spec.ts` | The private-channel roster end to end: two members see each other, a closed tab leaves within the 15 s heartbeat window and a reopened one restores the roster; a signed-in non-member of a private room is indistinguishable from a missing one, with zero presence frames observed; and `studying` badges appear when a session starts and clear when it ends |
 | `resources.spec.ts` | A file uploaded through the real form into the personal library, searchable and openable by its owner only, shared into a room and read by a member, refused for a non-member, then deleted — row and object both gone |
-| `helpers/` | Shared fixtures: users (sign-up/login/API sign-up), rooms (create/join/leave/search, selector anchors, sync status), resources (multipart bytes, row lookups, upload through the form, library anchors), realtime capture/injection and workspace-read counting |
+| `helpers/` | Shared fixtures: users (sign-up/login/API sign-up, `waitForHydration`), rooms (create/join/leave/search, selector anchors, sync status, presence count and participant badges), resources (multipart bytes, row lookups, upload through the form, library anchors), realtime capture/injection (including presence-frame parsing) and workspace-read counting |
 | `fixtures/` | Tiny on-disk files the upload tests send: a real `%PDF-` document and an impostor `.pdf` that is plain text |
 | `global-setup.ts` / `global-teardown.ts` | Environment guard reuse; per-run user cleanup, after this run's `storage.objects` rows (which have no FK to `auth.users`) |
 

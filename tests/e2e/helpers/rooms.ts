@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { waitForHydration } from "./users";
 
 let sequence = 0;
 
@@ -20,6 +21,8 @@ export async function createRoomViaUi(
 ): Promise<CreatedRoom> {
   const name = uniqueRoomName(opts.label);
   await page.goto("/rooms/new");
+  // Controlled inputs: fill only once React owns them (see waitForHydration).
+  await waitForHydration(page, "#name");
   await page.locator("#name").fill(name);
   await page.locator("#capacity").fill(String(opts.capacity ?? 4));
   if (opts.visibility) {
@@ -45,6 +48,8 @@ export function roomCard(page: Page, roomName: string) {
 /** Searches discovery for an exact room name (discovery lists public rooms). */
 export async function searchRooms(page: Page, query: string): Promise<void> {
   await page.goto("/rooms");
+  // Controlled input: fill only once React owns it (see waitForHydration).
+  await waitForHydration(page, "#room-search");
   await page.locator("#room-search").fill(query);
   await page.getByRole("button", { name: "Search", exact: true }).click();
 }
@@ -87,9 +92,31 @@ export function chatPanel(page: Page) {
   return page.getByRole("region", { name: "Chat" });
 }
 
-/** The chat channel indicator: Connecting… / Live / Reconnecting…. */
+/**
+ * The chat connection badge only: Connecting… / Live / Reconnecting… /
+ * Chat unavailable. The panel's header carries a second `role="status"` —
+ * the presence headcount — so the vocabulary, not the role alone, picks the
+ * one this helper means.
+ */
 export function chatStatus(page: Page) {
-  return chatPanel(page).getByRole("status");
+  return chatPanel(page)
+    .getByRole("status")
+    .filter({ hasText: /^(Connecting…|Live|Reconnecting…|Chat unavailable)$/ });
+}
+
+/**
+ * The presence headcount: `<n> here`, or `<n> studying · <n> here` while a
+ * session is running. Absent until the first presence sync has been observed.
+ */
+export function presenceCount(page: Page) {
+  return chatPanel(page).getByRole("status").filter({ hasText: /here$/ });
+}
+
+/** The roster as rendered — each `<li>` one member (`alias · studying`). */
+export function participantBadges(page: Page) {
+  return chatPanel(page)
+    .getByRole("list", { name: "Participants" })
+    .getByRole("listitem");
 }
 
 /** The realtime subscription indicator: Connecting… / Live / Reconnecting…. */

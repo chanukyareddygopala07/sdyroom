@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { publishStudying } from "@/lib/focus/studying-store";
 import type {
   FocusSession,
   FocusSessionState,
@@ -362,6 +363,17 @@ export function FocusTimer({
   const isOwner = viewerRole === "owner";
   const hasActiveSession = session?.state === "running" || session?.state === "paused";
   const durationMinutes = Math.round(durationSeconds / 60);
+
+  // Publish the flag presence reports about this viewer. The session belongs
+  // to the room (0003 keeps no starter column and only the owner controls
+  // the timer), so "the room is in a focus session" is the honest statement
+  // every member's client can make about itself. The cleanup publishes
+  // `false` so an unmounting timer — a room switch, a sign-out — can never
+  // leave a stale flag for the next room's presence track.
+  useEffect(() => {
+    publishStudying(hasActiveSession);
+    return () => publishStudying(false);
+  }, [hasActiveSession]);
 
   return (
     <section

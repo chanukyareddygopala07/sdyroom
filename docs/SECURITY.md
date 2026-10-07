@@ -34,6 +34,16 @@ file carries the model behind them.
 | Leaked URL | A signed URL pasted into a chat | TTL of 300 s (`DOWNLOAD_TTL_SECONDS`), re-issued only after a fresh authorization check; the token carries the expiry inside it |
 | Database row tampering | Direct `update`/`delete` through SQL or the API | `update`/`delete` are uploader-only, `owner_id`/`room_id`/`storage_path`/timestamps are outside the `UPDATE` grant, `updated_at` is owned by `study_resources_touch`, and `storage.protect_delete()` blocks a plain `delete from storage.objects` |
 
+## Room presence: what it discloses
+
+| Aspect | What it means |
+| --- | --- |
+| Payload | `{ alias, studying }` and nothing else — the member's chosen study alias (trimmed, ≤ 32 chars, untrusted display data) and whether the room currently has a running or paused shared focus session. **No user id, email, phone number or profile row** appears in any presence frame, and no `is_own` flag is taken from the payload (the client knows itself) |
+| Audience | Current members of that room only. The channel topic `room-presence-{roomId}` is gated by `supabase/migrations/0006_realtime_private_channels.sql`: two `TO authenticated` policies on `realtime.messages` that require a current `room_members` row for `auth.uid()` matching the uuid in the topic, extensions `broadcast`/`presence` only. A non-member cannot join, and a private room's existence cannot be confirmed by probing topics (join failure is indistinguishable from a nonexistent room) |
+| Durability | Nothing persists. Presence lives in the Realtime service's memory; a socket close removes it (a 60 s heartbeat re-tracks a half-open one). `0006` adds **no** table, column, grant or publication entry, and the authorization probes it relies on roll back in the same transaction |
+| `studying` | Room-scoped by construction: `focus_sessions` records no starter column (one active row per room, owner-only control), so the flag reports the room's shared session, not any individual's private activity — a stated reconciliation in PR 06, not a hidden shortcut |
+| Spoofing | A member can lie about their own alias and flag. Presence is therefore never used for authorization, never joined to `profiles` server-side, and never overrides the caller's own identity (`is_own` comes from the tracked key, not the payload) |
+
 ## Study resources: where the rules live
 
 | Layer | File | Rule |

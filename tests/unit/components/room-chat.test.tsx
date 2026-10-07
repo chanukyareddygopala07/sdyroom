@@ -1,29 +1,70 @@
 // @vitest-environment jsdom
 import { RoomChat } from "@/components/room-chat";
+import { presenceChannelTopic } from "@/lib/chat/presence";
 import type { ChatMessageView } from "@/lib/chat/types";
+import { publishStudying } from "@/lib/focus/studying-store";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
-  let statusCallback: ((status: string) => void) | null = null;
-  let insertHandler: ((payload: { new: unknown }) => void) | null = null;
-
-  const channel = {
-    on: vi.fn(
-      (
-        _type: string,
-        _filter: unknown,
-        callback: (payload: { new: unknown }) => void,
-      ) => {
-        insertHandler = callback;
-        return channel;
-      },
-    ),
-    subscribe: vi.fn((callback: (status: string) => void) => {
-      statusCallback = callback;
-      return channel;
-    }),
+  /**
+   * One mock per channel topic: the component now opens two channels (chat
+   * and presence) and each has its own status callback, handlers and track
+   * calls. A single shared object would let a presence status overwrite the
+   * chat's — the exact cross-talk the two-channel design exists to avoid.
+   */
+  type ChannelMock = {
+    topic: string;
+    config: unknown;
+    on: ReturnType<typeof vi.fn>;
+    subscribe: ReturnType<typeof vi.fn>;
+    track: ReturnType<typeof vi.fn>;
+    untrack: ReturnType<typeof vi.fn>;
+    presenceState: ReturnType<typeof vi.fn>;
+    emitStatus: (status: string) => void;
+    emitInsert: (record: unknown) => void;
+    emitPresenceSync: (state: Record<string, unknown[]>) => void;
   };
+
+  const channels = new Map<string, ChannelMock>();
+
+  function createChannel(topic: string, config?: unknown): ChannelMock {
+    let statusCallback: ((status: string) => void) | null = null;
+    let insertHandler: ((payload: { new: unknown }) => void) | null = null;
+    let presenceSync: (() => void) | null = null;
+    let latestState: Record<string, unknown[]> = {};
+
+    const channel: ChannelMock = {
+      topic,
+      config,
+      on: vi.fn((type: string, _filter: unknown, callback: unknown) => {
+        if (type === "postgres_changes") {
+          insertHandler = callback as (payload: { new: unknown }) => void;
+        } else if (type === "presence") {
+          presenceSync = callback as () => void;
+        }
+        return channel;
+      }),
+      subscribe: vi.fn((callback: (status: string) => void) => {
+        statusCallback = callback;
+        return channel;
+      }),
+      track: vi.fn(() => Promise.resolve("ok")),
+      untrack: vi.fn(() => Promise.resolve("ok")),
+      presenceState: vi.fn(() => latestState),
+      emitStatus: (status) => statusCallback?.(status),
+      emitInsert: (record) => insertHandler?.({ new: record }),
+      emitPresenceSync: (state) => {
+        latestState = state;
+        presenceSync?.();
+      },
+    };
+    return channel;
+  }
+
+  function channelWithPrefix(prefix: string): ChannelMock | undefined {
+    return [...channels.values()].find((c) => c.topic.startsWith(prefix));
+  }
 
   const profileRow = {
     select: vi.fn(() => profileRow),
@@ -37,24 +78,28 @@ const mocks = vi.hoisted(() => {
 
   return {
     router,
-    channel,
-    channelFactory: vi.fn(() => channel),
+    channelFactory: vi.fn((topic: string, config?: unknown) => {
+      const channel = createChannel(topic, config);
+      channels.set(topic, channel);
+      return channel;
+    }),
+    channelWithPrefix,
     removeChannel: vi.fn(),
     setAuth: vi.fn(() => Promise.resolve()),
-    getUser: vi.fn(() =>
-      Promise.resolve({
-        data: { user: { id: "44444444-4444-4444-8444-444444444444" } },
-        error: null,
-      }),
+    getUser: vi.fn(
+      (): Promise<{ data: { user: { id: string } | null }; error: null }> =>
+        Promise.resolve({
+          data: { user: { id: "44444444-4444-4444-8444-444444444444" } },
+          error: null,
+        }),
     ),
     profileRow,
     fetchMock: vi.fn(),
-    emitStatus: (status: string) => statusCallback?.(status),
-    emitInsert: (record: unknown) => insertHandler?.({ new: record }),
-    resetChannels: () => {
-      statusCallback = null;
-      insertHandler = null;
-    },
+    emitStatus: (status: string) =>
+      channelWithPrefix("room-messages-")?.emitStatus(status),
+    emitInsert: (record: unknown) =>
+      channelWithPrefix("room-messages-")?.emitInsert(record),
+    resetChannels: () => channels.clear(),
   };
 });
 
@@ -108,6 +153,20 @@ function connectionText(): string {
   return statuses[0]?.textContent ?? "";
 }
 
+function messagesChannel() {
+  return mocks.channelWithPrefix("room-messages-");
+}
+
+function presenceChannel() {
+  return mocks.channelWithPrefix("room-presence-");
+}
+
+function participantItems(): HTMLElement[] {
+  return Array.from(
+    screen.getByRole("list", { name: "Participants" }).querySelectorAll("li"),
+  );
+}
+
 function messageItems(): HTMLElement[] {
   return Array.from(
     screen.getByRole("list", { name: "Chat messages" }).querySelectorAll("li"),
@@ -122,11 +181,11 @@ function sendMessage(text: string): void {
 }
 
 function renderChat(
-  props: { initialMessages?: ChatMessageView[] } = {},
+  props: { initialMessages?: ChatMessageView[]; roomId?: string } = {},
 ): ReturnType<typeof render> {
   return render(
     <RoomChat
-      roomId={ROOM}
+      roomId={props.roomId ?? ROOM}
       initialMessages={props.initialMessages ?? [seeded]}
     />,
   );
@@ -139,8 +198,15 @@ async function flush(): Promise<void> {
 describe("RoomChat", () => {
   beforeEach(() => {
     mocks.resetChannels();
+    // The studying flag is module state shared with FocusTimer; a test that
+    // publishes it must not leak into the next one.
+    publishStudying(false);
     mocks.router.push.mockClear();
     mocks.fetchMock.mockReset();
+    // Call-order assertions (token before join) are only meaningful when
+    // each test starts with an empty invocation history.
+    mocks.setAuth.mockClear();
+    mocks.channelFactory.mockClear();
     vi.stubGlobal("fetch", mocks.fetchMock);
   });
 
@@ -417,17 +483,226 @@ describe("RoomChat", () => {
     renderChat();
     await flush();
 
+    // The channel is joined, but until a sync arrives there is no roster to
+    // show — and an empty claim would be a lie, not a placeholder.
+    expect(presenceChannel()).toBeTruthy();
     expect(screen.queryByText("Participants")).toBeNull();
     expect(screen.queryByRole("list", { name: "Participants" })).toBeNull();
   });
 
-  it("detaches the channel on unmount", async () => {
+  it("joins a separate private presence channel and tracks the viewer's alias", async () => {
+    renderChat();
+    await flush();
+
+    const presence = presenceChannel();
+    expect(presence?.topic).toBe(presenceChannelTopic(ROOM));
+    // RealtimeChannelOptions nests everything under `config`; `private` is
+    // what makes the server authorize the join against realtime.messages.
+    const options = presence?.config as {
+      config?: { private?: boolean };
+    };
+    expect(options?.config?.private).toBe(true);
+    expect(messagesChannel()).toBeTruthy();
+    expect(presence).not.toBe(messagesChannel());
+
+    act(() => presence?.emitStatus("SUBSCRIBED"));
+    expect(presence?.track).toHaveBeenCalledWith({
+      alias: "StudyStar",
+      studying: false,
+    });
+    // The chat badge follows the chat channel only: a presence ack is not a
+    // chat ack.
+    expect(connectionText()).toBe("Connecting…");
+  });
+
+  it("joins the presence channel only after the token is on the client", async () => {
+    renderChat();
+    await flush();
+
+    const setAuthOrder = mocks.setAuth.mock.invocationCallOrder[0];
+    expect(setAuthOrder).toBeDefined();
+    // The repo's "auth before join" rule, for both channels: no `channel()`
+    // call may precede the registration the join depends on.
+    for (const order of mocks.channelFactory.mock.invocationCallOrder) {
+      expect(order).toBeGreaterThan(setAuthOrder);
+    }
+    expect(mocks.channelFactory).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens no presence channel when there is no session", async () => {
+    mocks.getUser.mockResolvedValueOnce({
+      data: { user: null },
+      error: null,
+    });
+
+    renderChat();
+    await flush();
+
+    expect(presenceChannel()).toBeUndefined();
+    expect(screen.queryByRole("list", { name: "Participants" })).toBeNull();
+    expect(connectionText()).toBe("Reconnecting…");
+  });
+
+  it("keeps the roster when the messages channel fails", async () => {
+    renderChat();
+    await flush();
+
+    const presence = presenceChannel();
+    act(() => presence?.emitStatus("SUBSCRIBED"));
+    act(() =>
+      presence?.emitPresenceSync({
+        partner: [{ presence_ref: "1", alias: "Partner", studying: false }],
+      }),
+    );
+    expect(participantItems()).toHaveLength(1);
+
+    // The chat half fails; the roster is a separate surface and must not
+    // blank out with it.
+    act(() => mocks.emitStatus("CHANNEL_ERROR"));
+    expect(connectionText()).toBe("Reconnecting…");
+    expect(participantItems()).toHaveLength(1);
+    expect(screen.getByText("1 here")).toBeTruthy();
+  });
+
+  it("resets the roster when the room changes", async () => {
+    const { rerender } = renderChat();
+    await flush();
+
+    const presence = presenceChannel();
+    act(() => presence?.emitStatus("SUBSCRIBED"));
+    act(() =>
+      presence?.emitPresenceSync({
+        partner: [{ presence_ref: "1", alias: "Partner", studying: false }],
+      }),
+    );
+    expect(participantItems()).toHaveLength(1);
+
+    const otherRoom = "22222222-2222-4222-8222-222222222222";
+    rerender(
+      <RoomChat roomId={otherRoom} initialMessages={[seeded]} />,
+    );
+    await flush();
+
+    // The old room's faces are gone before the new room's join answers:
+    // unobserved, not empty-and-stale.
+    expect(screen.queryByRole("list", { name: "Participants" })).toBeNull();
+    expect(mocks.channelWithPrefix(`room-presence-${otherRoom}`)).toBeTruthy();
+  });
+
+  it("renders the roster from a presence sync, viewer's alias first", async () => {
+    renderChat();
+    await flush();
+
+    const presence = presenceChannel();
+    act(() => presence?.emitStatus("SUBSCRIBED"));
+    act(() =>
+      presence?.emitPresenceSync({
+        partner: [{ presence_ref: "1", alias: "Partner", studying: false }],
+        self: [{ presence_ref: "2", alias: "StudyStar", studying: false }],
+      }),
+    );
+
+    expect(participantItems().map((item) => item.textContent)).toEqual([
+      "StudyStar",
+      "Partner",
+    ]);
+    expect(screen.getByText("2 here")).toBeTruthy();
+    expect(screen.queryByText(/Nobody here but you/)).toBeNull();
+  });
+
+  it("marks studying members in the badge and in the count", async () => {
+    renderChat();
+    await flush();
+
+    const presence = presenceChannel();
+    act(() => presence?.emitStatus("SUBSCRIBED"));
+    act(() =>
+      presence?.emitPresenceSync({
+        partner: [{ presence_ref: "1", alias: "Partner", studying: true }],
+        self: [{ presence_ref: "2", alias: "StudyStar", studying: false }],
+      }),
+    );
+
+    expect(screen.getByText("1 studying · 2 here")).toBeTruthy();
+    expect(screen.getByText("Partner · studying")).toBeTruthy();
+    expect(screen.queryByText("StudyStar · studying")).toBeNull();
+  });
+
+  it("shows one badge per alias when the same member is present twice", async () => {
+    renderChat();
+    await flush();
+
+    const presence = presenceChannel();
+    act(() => presence?.emitStatus("SUBSCRIBED"));
+    act(() =>
+      presence?.emitPresenceSync({
+        tabLower: [{ presence_ref: "1", alias: "studystar", studying: false }],
+        tabProper: [{ presence_ref: "2", alias: "StudyStar", studying: true }],
+        partner: [{ presence_ref: "3", alias: "Partner", studying: false }],
+      }),
+    );
+
+    const items = participantItems();
+    expect(items).toHaveLength(2);
+    expect(
+      items.filter((item) =>
+        item.textContent?.toLowerCase().includes("studystar"),
+      ),
+    ).toHaveLength(1);
+    // Merged: one copy of the member is studying, so the badge says so.
+    expect(screen.getByText("1 studying · 2 here")).toBeTruthy();
+  });
+
+  it("keeps the last observed roster when the presence channel errors", async () => {
+    renderChat();
+    await flush();
+
+    const presence = presenceChannel();
+    act(() => presence?.emitStatus("SUBSCRIBED"));
+    act(() =>
+      presence?.emitPresenceSync({
+        partner: [{ presence_ref: "1", alias: "Partner", studying: false }],
+      }),
+    );
+    expect(participantItems()).toHaveLength(1);
+
+    act(() => presence?.emitStatus("CHANNEL_ERROR"));
+    // The last sync still stands: the roster is never replaced by a guess.
+    expect(participantItems()).toHaveLength(1);
+    expect(screen.getByText("1 here")).toBeTruthy();
+  });
+
+  it("re-tracks immediately when the shared session starts", async () => {
+    renderChat();
+    await flush();
+
+    const presence = presenceChannel();
+    act(() => presence?.emitStatus("SUBSCRIBED"));
+    expect(presence?.track).toHaveBeenCalledTimes(1);
+
+    act(() => publishStudying(true));
+    expect(presence?.track).toHaveBeenLastCalledWith({
+      alias: "StudyStar",
+      studying: true,
+    });
+
+    act(() => publishStudying(false));
+    expect(presence?.track).toHaveBeenLastCalledWith({
+      alias: "StudyStar",
+      studying: false,
+    });
+  });
+
+  it("detaches both channels on unmount", async () => {
     const { unmount } = renderChat();
     await flush();
 
     act(() => mocks.emitStatus("SUBSCRIBED"));
     unmount();
 
-    expect(mocks.removeChannel).toHaveBeenCalledWith(mocks.channel);
+    expect(mocks.removeChannel).toHaveBeenCalledWith(messagesChannel());
+    expect(mocks.removeChannel).toHaveBeenCalledWith(presenceChannel());
+    // An explicit leave so the server cannot keep a ghost of this viewer.
+    expect(presenceChannel()?.untrack).toHaveBeenCalled();
   });
 });
