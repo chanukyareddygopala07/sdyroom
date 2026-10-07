@@ -5,6 +5,7 @@ import { RoomChat } from "@/components/room-chat";
 import { RoomInvitePanel } from "@/components/room-invite-panel";
 import { RoomRoster } from "@/components/room-roster";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { listMessages } from "@/lib/chat/queries";
 import { FocusSessionError } from "@/lib/focus/sessions";
 import { getFocusWorkspace } from "@/lib/focus/workspace";
@@ -135,7 +136,7 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
           <h1 className="text-2xl font-semibold">{room.name}</h1>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={room.status === "open" ? "default" : "secondary"}>
-              {room.status}
+              {room.status === "open" ? "Open" : "Closed"}
             </Badge>
             <Badge variant="secondary">
               {member_count} of {room.capacity}{" "}
@@ -144,6 +145,14 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
             <Badge variant="outline">
               {viewer_role === "owner" ? "owner" : "member"}
             </Badge>
+            {/* Convenience only — the settings page and both API routes
+                re-prove ownership server-side; a member who types the URL
+                gets the same 404 as a stranger. */}
+            {viewer_role === "owner" && (
+              <Button asChild size="sm" variant="outline">
+                <Link href={`/rooms/${room.id}/settings`}>Room settings</Link>
+              </Button>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">

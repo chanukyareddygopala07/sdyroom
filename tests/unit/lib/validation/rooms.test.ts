@@ -3,6 +3,7 @@ import {
   createRoomSchema,
   roomIdSchema,
   roomSearchSchema,
+  updateRoomSchema,
 } from "@/lib/validation/rooms";
 import { describe, expect, it } from "vitest";
 
@@ -97,6 +98,95 @@ describe("createRoomSchema", () => {
 
     expect(parsed).not.toHaveProperty("owner_id");
     expect(parsed).not.toHaveProperty("id");
+  });
+});
+
+describe("updateRoomSchema", () => {
+  it("accepts a partial body and keeps only the keys that were sent", () => {
+    const parsed = updateRoomSchema.parse({ name: "  Renamed  " });
+    expect(parsed).toEqual({ name: "Renamed" });
+    expect(Object.keys(parsed)).toEqual(["name"]);
+  });
+
+  it("parses an empty object but with zero keys, so the route can refuse it", () => {
+    const parsed = updateRoomSchema.parse({});
+    expect(parsed).toEqual({});
+    expect(Object.keys(parsed)).toHaveLength(0);
+  });
+
+  it("coerces capacity from a form string and validates the same range as the CHECK", () => {
+    expect(updateRoomSchema.parse({ capacity: "7" })).toEqual({ capacity: 7 });
+    expect(updateRoomSchema.safeParse({ capacity: 0 }).success).toBe(false);
+    expect(updateRoomSchema.safeParse({ capacity: 101 }).success).toBe(false);
+    expect(updateRoomSchema.safeParse({ capacity: 2.5 }).success).toBe(false);
+  });
+
+  it("accepts only the two database statuses", () => {
+    expect(updateRoomSchema.parse({ status: "closed" })).toEqual({
+      status: "closed",
+    });
+    expect(updateRoomSchema.safeParse({ status: "archived" }).success).toBe(
+      false,
+    );
+  });
+
+  it("normalises cleared optional fields to null and keeps blank names invalid", () => {
+    expect(
+      updateRoomSchema.parse({
+        shared_goal: "   ",
+        exam_track: "",
+        subject: null,
+        language: null,
+      }),
+    ).toEqual({
+      shared_goal: null,
+      exam_track: null,
+      subject: null,
+      language: null,
+    });
+
+    // A room always has a name: blank is a validation error, not a clear.
+    expect(updateRoomSchema.safeParse({ name: "   " }).success).toBe(false);
+    expect(updateRoomSchema.safeParse({ name: "" }).success).toBe(false);
+  });
+
+  it("enforces the per-field length limits after trimming", () => {
+    expect(
+      updateRoomSchema.safeParse({ name: "a".repeat(101) }).success,
+    ).toBe(false);
+    expect(
+      updateRoomSchema.safeParse({ shared_goal: "a".repeat(501) }).success,
+    ).toBe(false);
+    expect(
+      updateRoomSchema.safeParse({ exam_track: "a".repeat(81) }).success,
+    ).toBe(false);
+    expect(
+      updateRoomSchema.safeParse({ subject: "a".repeat(81) }).success,
+    ).toBe(false);
+    expect(
+      updateRoomSchema.safeParse({ language: "a".repeat(41) }).success,
+    ).toBe(false);
+  });
+
+  it("refuses identity and immutable fields instead of dropping them quietly", () => {
+    for (const key of [
+      "owner_id",
+      "visibility",
+      "id",
+      "created_at",
+      "updated_at",
+    ]) {
+      const parsed = updateRoomSchema.safeParse({
+        name: "Renamed",
+        [key]: "anything",
+      });
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        expect(
+          parsed.error.issues.some((issue) => issue.code === "unrecognized_keys"),
+        ).toBe(true);
+      }
+    }
   });
 });
 
