@@ -67,6 +67,10 @@ must not be disabled outside local development.
 `leave_room` and `public_room_member_counts` — and changes no table, grant or policy.
 `supabase/migrations/0003_focus_sessions_and_goals.sql` adds the shared focus timer
 and personal goals: two tables, five RPCs, a trigger and the realtime publication.
+`supabase/migrations/0004_room_messages.sql` adds append-only room chat (one table,
+two policies, realtime). `supabase/migrations/0005_study_resources.sql` adds the
+personal/room file library: one table, four table policies, a **private storage
+bucket** and three policies on `storage.objects`.
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
@@ -75,25 +79,30 @@ and personal goals: two tables, five RPCs, a trigger and the realtime publicatio
 | `room_members` | PK `(room_id, user_id)`, `role`, `joined_at` | `role` ∈ `owner`/`student` (default `student`). `room_id` and `user_id` both `ON DELETE CASCADE`. Index on `user_id`. |
 | `focus_sessions` | `id`, `room_id` → `rooms`, `state`, `duration_seconds`, `started_at`, `ends_at`, `paused_at`, `paused_seconds`, `ended_at` | `state` ∈ `running`/`paused`/`completed`/`expired`. Partial unique index `focus_sessions_one_active (room_id) where state in ('running','paused')` — at most one active session per room, concurrency-safe. CHECKs pair `paused ⇔ paused_at` and `terminal ⇔ ended_at`, and require `ends_at > started_at`. Selected by `authenticated` only; every write goes through the RPCs. |
 | `study_goals` | `id`, `user_id` → `auth.users`, `room_id` → `rooms`, `title`, `target_seconds`, `target_count`, `status`, `completed_at`, `created_at`, `updated_at` | Personal rows: `status` ∈ `active`/`completed`, `completed_at` set and cleared by the `study_goals_touch` trigger (never accepted from a client), CHECK `(status = 'completed') = (completed_at is not null)`. Partial unique index on `(user_id, room_id, lower(title)) where status = 'active'` — one active goal per title, reusable once completed. `user_id`/`room_id` cascade on delete. |
+| `room_messages` | `id`, `room_id` → `rooms`, `user_id` → `auth.users`, `alias`, `body`, `seq`, `created_at` | Append-only chat history: `SELECT`+`INSERT` only, no `UPDATE`/`DELETE` grant and no such policy, so a message that was said stays said. `alias` is the sender's study alias copied at send time (rendering never joins `profiles`); `seq` is an identity column giving a total order for `before=` cursor pagination that `created_at` alone cannot. CHECKs: body trimmed, 1–2000 chars; alias ≤ 32. |
+| `study_resources` | `id`, `owner_id` → `auth.users`, `room_id` → `rooms`, `storage_path`, `title`, `original_filename`, `content_type`, `size_bytes`, `subject`, `chapter`, `created_at`, `updated_at` | `room_id IS NULL` = personal (uploader only), otherwise shared with that room's current members. `owner_id` defaults to `auth.uid()` and is granted for **neither** `INSERT` nor `SELECT`, so a browser cannot choose an owner and the column never leaves the database. `storage_path` is server-built and pinned by a regex CHECK to `personal/{owner}/{id}{ext}` or `rooms/{room}/{owner}/{id}{ext}`, with a second CHECK tying the two representations of scope together (`(room_id is null) = (storage_path like 'personal/%')`). `content_type` ∈ the five sniffed types, `size_bytes` 1–20 MiB. Unique on `storage_path`; `updated_at` owned by `study_resources_touch`. |
 
 No sample rooms and no fabricated auth users are inserted by SQL: `supabase/seed.sql`
 is intentionally empty, and local test data is made only through the Auth API and the
 `create_room` / `join_room` RPCs.
 
-`focus_sessions` is added to the `supabase_realtime` publication, so members' clients
-receive `postgres_changes` events for their room's session and re-read the workspace;
-`study_goals` is deliberately not published (goals refetch, they are never pushed).
+`focus_sessions` and `room_messages` are added to the `supabase_realtime`
+publication, so members' clients receive `postgres_changes` events for their room's
+session and chat and re-read the view; `study_goals` and `study_resources` are
+deliberately not published (goals refetch, they are never pushed; files are listed
+on demand, and a push would carry no bytes — downloads always go through the
+signed-URL endpoint).
 
 ## Grants
 
 Grants are explicit and column-aware (`auto_expose_new_tables = false` in
 `config.toml`, so new tables receive no default API-role grants):
 
-| Grantee | `profiles` | `rooms` | `room_members` | `focus_sessions` | `study_goals` |
-| --- | --- | --- | --- | --- | --- |
-| `anon` | none | none | none | none | none |
-| `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` | `SELECT` | `SELECT`, `INSERT`, `DELETE`, `UPDATE (title, target_seconds, target_count, status)` |
-| `service_role` | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges |
+| Grantee | `profiles` | `rooms` | `room_members` | `focus_sessions` | `study_goals` | `room_messages` | `study_resources` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `anon` | none | none | none | none | none | none | none |
+| `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` | `SELECT` | `SELECT`, `INSERT`, `DELETE`, `UPDATE (title, target_seconds, target_count, status)` | `SELECT`, `INSERT` | `SELECT` / `INSERT` / `UPDATE (title, subject, chapter)` / `DELETE`, each on an explicit column list — **never `owner_id`** |
+| `service_role` | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges |
 
 **No `UPDATE` or `DELETE` on `rooms` / `room_members`** — those flows are deliberately
 undeveloped. `authenticated` has no table-level `SELECT` on `profiles` by design: only
@@ -109,6 +118,15 @@ addressable at all. The stack also defines a default ACL that would give these r
 `TRUNCATE`/`REFERENCES`/`TRIGGER`/`MAINTAIN` on new public tables, so `0003` starts by
 revoking everything from `anon`, `authenticated` and `service_role` before granting.
 
+`0004` and `0005` follow the identical revoke-first shape. `room_messages` gets only
+`SELECT`/`INSERT` — with no `UPDATE` or `DELETE` grant, history cannot be edited
+through PostgREST even before RLS is considered. `study_resources` is the first table
+whose grant matrix is per-verb *and* per-column for every verb, and the first where a
+column (`owner_id`) appears in none of them: an `INSERT` naming it fails on
+privilege grounds, and a `SELECT` never has it to leak. `storage_path` *is* granted
+for `SELECT` (the delete path needs to know which object to remove) but is excluded
+from `STUDY_RESOURCE_COLUMNS`, so no response ever carries it.
+
 ## Row Level Security
 
 | Table | Policy | Effect |
@@ -122,9 +140,62 @@ revoking everything from `anon`, `authenticated` and `service_role` before grant
 | `room_members` | `room_members_insert_owner_self` | only the room owner, about themselves, as `owner` |
 | `focus_sessions` | `focus_sessions_select_member` | members of the room only; there is no insert/update/delete policy, so RLS denies them even if a grant ever appeared |
 | `study_goals` | `study_goals_select_own` / `insert_own` / `update_own` / `delete_own` | `user_id = auth.uid()` only; the insert policy also requires membership of the goal's room, so a goal cannot be attached to a room the writer has not joined |
+| `room_messages` | `room_messages_select_member` | members of the message's room only |
+| `room_messages` | `room_messages_insert_own_member` | `user_id = auth.uid()` **and** membership — a forged sender is impossible even for a direct PostgREST insert |
+| `study_resources` | `study_resources_select_own_or_member` | own rows, plus rows whose `room_id` has a `room_members` row for `auth.uid()` **right now** — leaving a room revokes read access on the next query, with no file moved or deleted |
+| `study_resources` | `study_resources_insert_own_member` | `owner_id = auth.uid()`, membership of the target room, and a `storage_path` under the caller's own folder in the matching prefix |
+| `study_resources` | `study_resources_update_own` / `delete_own` | `owner_id = auth.uid()` — a room member can read a shared file and still cannot edit or remove it |
+
+Storage objects have their own three policies (next section); they are not listed
+above because they live on `storage.objects`, not on a table in `public`.
 
 There are **no policies for `anon` on any table** (verified: 0 policies for roles other
 than `authenticated`), and anon holds no table privileges either.
+
+## Private storage bucket (`0005_study_resources.sql`)
+
+`storage.buckets` is written by the migration itself, so `supabase db reset`
+provisions the whole feature — CI and a fresh checkout need nothing beyond the
+migrations they already run (`on conflict` keeps it idempotent for a stack that
+already has it):
+
+| Bucket | `public` | `file_size_limit` | `allowed_mime_types` |
+| --- | --- | --- | --- |
+| `study-resources` | **false** | 20 971 520 (20 MiB) | `application/pdf`, `image/png`, `image/jpeg`, `text/plain`, `text/markdown` |
+
+There is no code path that produces a permanent URL for these bytes.
+
+**Key layout.** Two shapes only, both built from server-generated UUIDs:
+
+```
+personal/{owner}/{id}{ext}            the uploader, and nobody else
+rooms/{room}/{owner}/{id}{ext}        current members of {room}
+```
+
+`storage.foldername(name)` splits on `/` and returns every segment *except* the
+last, so those keys resolve to array lengths **2** and **3** respectively. The
+policies check `array_length(...) = n` exactly, which is what makes the layout
+strict: a key with extra segments lands on a different length and is denied, so
+`personal/{owner}/../../x` cannot be made to line up. Indexing past the end
+yields `NULL`, which compares to `NULL` and fails closed, and membership is
+matched as `m.room_id::text = segment` — text against text, so no
+attacker-controlled segment is ever cast to `uuid` (no cast error to turn into
+an oracle).
+
+| Policy | Verb | Effect |
+| --- | --- | --- |
+| `study_resources_objects_select` | `SELECT` | own `personal/…` key, or any `rooms/{room}/…` key while a `room_members` row exists for `auth.uid()` — the same scope as the table policy, read out of the key |
+| `study_resources_objects_insert` | `INSERT` | `owner = auth.uid()` plus the matching layout, so storage's own record of who wrote the object must agree with the path |
+| `study_resources_objects_delete` | `DELETE` | `owner = auth.uid()` — one member can never remove another's upload by talking to storage directly, and the API can still clean up after a failed metadata insert |
+| *(none)* | `UPDATE` | default deny; nothing in the app rewrites an object |
+
+Because the key carries the scope, a hand-written `POST /storage/v1/object/…` is
+subject to exactly the same rules as the app. Verified against the local stack:
+an upload returns `403` the moment its `INSERT` policy is dropped, and
+`createSignedUrl` answers "not found" with no `SELECT` policy. Storage RLS is
+enforced for authenticated callers in general (`storage.protect_delete()` also
+blocks a plain `delete from storage.objects` unless the session sets
+`storage.allow_delete_query = 'true'`, which is what the e2e teardown does).
 
 ## `create_room` RPC
 
@@ -222,14 +293,18 @@ All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001_init.sql, 0002_room_membership.sql, 0003_focus_sessions_and_goals.sql
-npx supabase migration list --local # 0001, 0002 and 0003 present locally
+npx supabase db reset               # exit 0: applied 0001 … 0005
+npx supabase migration list --local # 0001 … 0005 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
 
-- RLS enabled on `profiles`, `rooms`, `room_members` (`relrowsecurity = t`).
-- 9 policies, all `TO authenticated`; 0 policies for any other role.
+- RLS enabled on all seven tables: `profiles`, `rooms`, `room_members`,
+  `focus_sessions`, `study_goals`, `room_messages`, `study_resources`
+  (`relrowsecurity = t`).
+- 20 policies, every one `to authenticated`; 0 policies for any other role
+  (3 storage policies on `storage.objects` for `study-resources` alongside them,
+  also `authenticated` only).
 - FKs: `rooms.owner_id`/`room_members.user_id`/`profiles.id` → `auth.users`
   `ON DELETE CASCADE`; `room_members.room_id` → `rooms` `ON DELETE CASCADE`.
 - Composite PK `(room_id, user_id)`, unique `profiles_alias_lower_key` on `lower(alias)`.
@@ -295,6 +370,23 @@ through real authenticated users) and covered end to end by
 | Goals timestamps | completing sets `completed_at`, reopening clears it, direct writes cannot backdate either (`study_goals_touch` trigger) |
 | Cleanup | harness leaves `profiles=0 rooms=0 sessions=0 goals=0 users=0` |
 
+Study resources and the private bucket (`0005_study_resources.sql`), verified
+against the local stack and covered end to end by
+`tests/integration/study-resources.test.ts`:
+
+| Requirement | Result |
+| --- | --- |
+| Bucket | `study-resources` exists with `public = false`, `file_size_limit = 20971520` and the five allowed MIME types; a plain `GET` on an object without a signature fails |
+| `owner_id` privileges | **no** privilege of any verb for `authenticated` (`INSERT` is refused on privilege grounds before any policy runs; `SELECT` never carries it) |
+| `storage_path` privileges | `SELECT` + `INSERT` for `authenticated`; excluded from `STUDY_RESOURCE_COLUMNS`, so no response carries it |
+| Table privileges | `DELETE` is the only table-level grant; `SELECT`/`INSERT`/`UPDATE` are column-scoped; `anon` and `service_role` hold none |
+| Policies | 4 on `study_resources` + 3 on `storage.objects`, all `to authenticated`, all keyed to `auth.uid()` and current `room_members` rows |
+| Personal read isolation | owner sees 1 row, another authenticated student sees 0, anonymous listing is denied |
+| Room sharing | members read and open it; a non-member gets the workspace's `404`; **leaving the room revokes it immediately** without moving a file |
+| Cross-user writes | another student's `DELETE` → `404`, direct object write into someone else's `personal/{owner}/…` folder → denied, forged `owner_id` field → rejected by the API instead of ignored |
+| Key layout | a hand-written row pointing outside `personal/{owner}/{id}{ext}` / `rooms/{room}/{owner}/{id}{ext}` fails `study_resources_storage_path_layout`; `(room_id is null) = (storage_path like 'personal/%')` is enforced separately |
+| Upload validation | bytes that do not match the declared type/extension → `400 malformed_file`; the content type comes from sniffing, never from the browser |
+
 ## Notes and risks
 
 - Disk is the binding constraint: the local images need several GB. If Docker or the
@@ -307,3 +399,7 @@ through real authenticated users) and covered end to end by
   UI to close or edit a room: `rooms` has no `UPDATE`/`DELETE` grant.
 - Authenticated API behaviour is covered by `tests/integration/` (run it with
   `npm run test:integration`); the schema itself is proven by `db lint` and `db reset`.
+- The `study-resources` bucket is created by `0005`, so a reset provisions it too;
+  object access always goes through a 300-second signed URL issued after a fresh
+  authorization check. The threat model behind all of this is written down in
+  `docs/SECURITY.md`, and the endpoint contracts in `docs/API_CONTRACTS.md`.

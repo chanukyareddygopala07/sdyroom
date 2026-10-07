@@ -1,13 +1,16 @@
 import { FocusTimer } from "@/components/focus-timer";
 import { GoalsPanel } from "@/components/goals-panel";
+import { ResourceLibrary } from "@/components/resources/resource-library";
 import { RoomChat } from "@/components/room-chat";
 import { Badge } from "@/components/ui/badge";
 import { listMessages } from "@/lib/chat/queries";
 import { FocusSessionError } from "@/lib/focus/sessions";
 import { getFocusWorkspace } from "@/lib/focus/workspace";
 import { listGoals } from "@/lib/goals/queries";
+import { listResources } from "@/lib/resources/queries";
 import { createClient } from "@/lib/supabase/server";
 import { MESSAGE_PAGE_SIZE_DEFAULT } from "@/lib/validation/chat";
+import { RESOURCE_PAGE_SIZE_DEFAULT } from "@/lib/validation/resources";
 import { roomIdSchema } from "@/lib/validation/rooms";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
@@ -57,12 +60,26 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
     throw error;
   }
 
-  const goals = await listGoals(supabase, parsedRoomId.data);
-  const { messages } = await listMessages(supabase, {
-    roomId: parsedRoomId.data,
-    viewerId,
-    limit: MESSAGE_PAGE_SIZE_DEFAULT,
-  });
+  // Membership is already proven by the workspace read above, so the library
+  // query here is simply RLS applying room membership to the same viewer.
+  const [goals, { messages }, resources] = await Promise.all([
+    listGoals(supabase, parsedRoomId.data),
+    listMessages(supabase, {
+      roomId: parsedRoomId.data,
+      viewerId,
+      limit: MESSAGE_PAGE_SIZE_DEFAULT,
+    }),
+    listResources(supabase, {
+      viewerId,
+      scope: "room",
+      roomId: parsedRoomId.data,
+      q: "",
+      subject: null,
+      chapter: null,
+      limit: RESOURCE_PAGE_SIZE_DEFAULT,
+      offset: 0,
+    }),
+  ]);
   const { room, member_count, viewer_role } = workspace;
 
   return (
@@ -113,6 +130,18 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
       {/* Keyed per room so a room switch cannot show the previous room's
           messages or connection badge while the new channel joins. */}
       <RoomChat key={room.id} roomId={room.id} initialMessages={messages} />
+
+      {/* Same keying rationale: files from another room must never be listed
+          while the new room's request is still in flight. */}
+      <ResourceLibrary
+        key={`resources-${room.id}`}
+        scope={{ kind: "room", roomId: room.id }}
+        initialResources={resources.resources}
+        idPrefix={`room-${room.id}`}
+        level={2}
+        heading="Resources"
+        description="Files shared with this room. Every member can open them; only the uploader can delete them."
+      />
     </section>
   );
 }

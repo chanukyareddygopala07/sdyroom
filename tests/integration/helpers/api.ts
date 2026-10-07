@@ -6,6 +6,12 @@ export type ApiRequest = {
   body?: unknown;
   /** Pre-serialized body, for malformed-JSON cases `body` cannot express. */
   rawBody?: string;
+  /**
+   * Multipart body. `Request` derives the boundary itself, so the default
+   * JSON content-type is dropped for these — leaving it would make the body
+   * unreadable and turn every upload into a 400.
+   */
+  form?: FormData;
   headers?: Record<string, string>;
 };
 
@@ -41,11 +47,16 @@ export async function callApiWithParams<C>(
 
 function toNextRequest(request: ApiRequest): NextRequest {
   const url = new URL(request.path, "http://127.0.0.1:3000");
-  const init: { method: string; headers: Headers; body?: string } = {
+  const headers = new Headers({ "content-type": "application/json", ...request.headers });
+  const init: { method: string; headers: Headers; body?: string | FormData } = {
     method: request.method ?? "GET",
-    headers: new Headers({ "content-type": "application/json", ...request.headers }),
+    headers,
   };
-  if (request.rawBody !== undefined) {
+
+  if (request.form !== undefined) {
+    headers.delete("content-type");
+    init.body = request.form;
+  } else if (request.rawBody !== undefined) {
     init.body = request.rawBody;
   } else if (request.body !== undefined) {
     init.body = JSON.stringify(request.body);

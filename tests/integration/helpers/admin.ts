@@ -80,12 +80,14 @@ export function assertSchemaApplied(): void {
       "and to_regclass('public.rooms') is not null " +
       "and to_regclass('public.room_members') is not null " +
       "and to_regclass('public.focus_sessions') is not null " +
-      "and to_regclass('public.study_goals') is not null;",
+      "and to_regclass('public.study_goals') is not null " +
+      "and to_regclass('public.study_resources') is not null;",
   );
   if (marker !== "t") {
     throw new Error(
       "The public.profiles / public.rooms / public.room_members / " +
-        'public.focus_sessions / public.study_goals tables are missing. ' +
+        'public.focus_sessions / public.study_goals / public.study_resources ' +
+        'tables are missing. ' +
         'Apply the migrations with "npx supabase db reset".',
     );
   }

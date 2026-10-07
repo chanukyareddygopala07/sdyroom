@@ -3,6 +3,8 @@ import { vi } from "vitest";
 export type FakeResult = {
   data?: unknown;
   error?: { code?: string | null; message?: string | null } | null;
+  /** Present only when the fake was given one, so `toEqual` stays strict. */
+  count?: number;
 };
 
 export type FakeBuilder = ReturnType<typeof createFakeBuilder>;
@@ -22,6 +24,11 @@ export function createFakeBuilder(result: FakeResultOrNext) {
     typeof result === "function" ? result : () => result;
   const state = {
     select: [] as string[],
+    /** The second argument of each `select`, in call order. */
+    selectOptions: [] as unknown[],
+    is: [] as [string, unknown][],
+    ilike: [] as [string, unknown][],
+    range: [] as [number, number][],
     eq: [] as [string, unknown][],
     in: [] as [string, unknown[]][],
     order: [] as [string, Record<string, unknown>][],
@@ -33,8 +40,21 @@ export function createFakeBuilder(result: FakeResultOrNext) {
   };
 
   const builder = {
-    select: vi.fn((columns: string) => {
+    select: vi.fn((columns: string, options?: unknown) => {
       state.select.push(columns);
+      state.selectOptions.push(options);
+      return builder;
+    }),
+    is: vi.fn((column: string, value: unknown) => {
+      state.is.push([column, value]);
+      return builder;
+    }),
+    ilike: vi.fn((column: string, value: unknown) => {
+      state.ilike.push([column, value]);
+      return builder;
+    }),
+    range: vi.fn((from: number, to: number) => {
+      state.range.push([from, to]);
       return builder;
     }),
     eq: vi.fn((column: string, value: unknown) => {
