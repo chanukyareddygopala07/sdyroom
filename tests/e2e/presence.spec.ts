@@ -173,6 +173,13 @@ test.describe("room presence in the browser", () => {
 
       // Reopening: same account, fresh socket — an identical list, no
       // ghosts of the departed connection and no duplicates.
+      //
+      // The frame index is frozen before the reopen, not after it: the
+      // rejoin diff can reach the owner before this page's own `Live` badge
+      // appears (the chat channel acks and tracks faster than the focus
+      // channel's `wait:true` registration), so an index snapshotted after
+      // `waitForLive` could sit past the very frame the poll waits for.
+      const framesBeforeReturn = captureOwner.presenceFrames(topic).length;
       reopened = await browser.newContext();
       const memberAgain = await reopened.newPage();
       await login(memberAgain, memberUser);
@@ -180,7 +187,6 @@ test.describe("room presence in the browser", () => {
       await enterRoomViaUi(memberAgain, room.name);
       await waitForLive(memberAgain);
 
-      const framesBeforeReturn = captureOwner.presenceFrames(topic).length;
       await expect
         .poll(
           () =>

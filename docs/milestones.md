@@ -13,8 +13,9 @@ Working log: what has landed, what each milestone still owes.
 | G — shared study workspace, synchronized focus timers and personal goals | `1937e16` | done |
 | H — browser end-to-end suite and realtime reliability | `9a98a4a`–`ebcc16e` | done |
 | Room chat — `0004_room_messages.sql`, messages API, realtime wiring, workspace mount | `e0e4eb2` | done |
-| Room presence — `0006_realtime_private_channels.sql`, private-channel policies, roster UI and `studying` flag | `feat/room-presence` | in progress |
+| Room presence — `0006_realtime_private_channels.sql`, private-channel policies, roster UI and `studying` flag | `91d2bed` (PR #6) | done |
 | I — private notes and PDF sharing: `0005_study_resources.sql`, private storage bucket, resource APIs, personal/room library | `feat/private-notes-library` | in progress |
+| Private room invitations + member roster — `0007_room_invitations.sql`, addressed invitations, invite inbox, owner invite panel, `room_roster` RPC | `feat/private-room-invitations` | in review (PR #7) |
 
 ## Milestone D — task breakdown
 
@@ -378,15 +379,72 @@ Working log: what has landed, what each milestone still owes.
       removing 27 run users and this run's storage objects); then committed on
       `feat/private-notes-library` and opened as a PR.
 
+## Private room invitations + roster — task breakdown (PR 07)
+
+- [x] Preflight — clean tree on `feat/private-room-invitations` from merged
+      `origin/main` (`91d2bed`), stack healthy, baseline gates green (544 unit /
+      156 integration / 22 e2e), and PR-07's bearer-link spec reconciled with the
+      task prompt before any code: **addressed alias invitations supersede
+      tokens and `/invite/[token]`** (reconciliation recorded in
+      `docs/prs/PR-07-private-invitations.md`).
+- [x] `supabase/migrations/0007_room_invitations.sql` — `room_invitations`
+      (addressed rows, `status` CHECK with `pending ⇔ resolved_at is null`,
+      `expires_at > created_at` CHECK, one-pending-per-(room, invitee) partial
+      unique index), revoke-first `SELECT`-only grant, one policy
+      (`room_invitations_select_addressed`), five `SECURITY DEFINER` RPCs
+      (`create`/`accept`/`reject`/`revoke_room_invitation`, `room_roster`) and
+      the `join_room_core` refactor that keeps `join_room`'s signature, ACL and
+      behaviour identical while letting acceptance seat through the same
+      row-locked capacity code with a private gate no client can reach. The
+      reject success code is `ok` — distinct from the `rejected` failure code —
+      so a caller can never confuse a success with a 409.
+- [x] Lib layer — `lib/validation/invitations.ts` (alias/ttl/id schemas, strict
+      bodies), `lib/invitations/{types,queries}.ts` (shaped views with derived
+      `expired`, `InvitationError` code map, `RosterDeniedError`,
+      `readRoomVisibility`), `lib/rooms/access.ts` gained `requireRoomOwner`
+      (`RoomOwnerError` → 403 `not_owner`, non-member still 404).
+- [x] API — six route files: `POST`/`GET /api/rooms/[id]/invitations`,
+      `DELETE /api/rooms/[id]/invitations/[invitationId]`, `GET /api/invitations`
+      (invitee inbox), `POST /api/invitations/[id]/{accept,reject}` (empty-body
+      rules, session-only identity), `GET /api/rooms/[id]/members`. Every
+      handler documents its full status/code table in a doc comment.
+- [x] UI — `RoomRoster` (alias/role/joined, presence annotations from
+      `lib/chat/presence-store.ts`, published by `RoomChat`), `RoomInvitePanel`
+      (owner-only, private rooms only: create by alias, pending list, revoke),
+      `InvitationsList` + `/invitations` inbox with accept/reject, `InvitationsNavLink`
+      in the shell, workspace mounts keyed per room.
+- [x] Hydration hardening — fixed UTC date slices in the roster/invite lists
+      (never `toLocale*`: the repo's `resource-library` rule), unique sibling
+      keys for the workspace panels, and `presence.spec.ts`'s reopen poll index
+      frozen before the reopen (it could previously snapshot past the very frame
+      it waited for — pre-existing flake, 1 pass / 4 fails on baseline).
+- [x] Tests — 63 new unit tests (validators, presence store, the six routes)
+      taking `npm test` 544 → **607**; `tests/integration/room-invitations.test.ts`
+      (37) taking the integration suite 156 → **193**; `tests/e2e/invitations.spec.ts`
+      (4) taking e2e 22 → **26**. `assertSchemaApplied` now requires
+      `room_invitations`; policy/grant freezes are asserted by checksum.
+- [x] Docs — `docs/ARCHITECTURE.md` (new), invitations + roster sections in
+      `API_CONTRACTS.md` / `SECURITY.md` / `local-supabase.md`, this file,
+      `PR_ROADMAP.md` rows, and the PR-07 spec reconciliation.
+- [x] Gates — `npm run lint` (0), `npx tsc --noEmit` (0), `npm test` (607 across
+      48 files), `npm run test:integration` (193 across 12 files), `npm run build`,
+      `npm run test:e2e` (26/26), `npx supabase db lint --local` (0), fresh
+      `npx supabase db reset` (0001–0007).
+
 ## Not in this milestone
 
 - **Browser coverage arrived in H, API/RLS coverage still leads.** Pages are driven by
   the Chromium suite and the realtime subscription now runs against live sockets, but
   the deepest adversarial coverage (races, grants, privacy) remains at the integration
   level.
-- **No member lists, invites or private-room joining.** Only the caller learns their
-  own membership, and a private room stays invisible to the public join endpoint;
-  sharing an invite to a private room is not built.
+- **Member lists and private-room invitations now exist (PR 07); discovery of
+  private rooms still does not.** The roster is a membership-checked read
+  (`GET /api/rooms/[id]/members`), invitations are addressed to a student's
+  alias and accepted from their `/invitations` inbox, and a private room stays
+  invisible to public discovery and to `join_room` for non-members — accepting
+  an invitation never makes it public. Email/phone invitations and invite links
+  are deliberately not built (the app collects no contact data); room
+  moderation of members (kicking, transfer) is PR 09.
 - **No room editing or deletion.** `rooms` has no `UPDATE`/`DELETE` grant, so a room
   can be created, discovered, joined and left — but not renamed, closed from the UI,
   or removed.

@@ -1,6 +1,10 @@
 import { AuthButton } from "@/components/auth-button";
 import { EnvVarWarning } from "@/components/env-var-warning";
-import { NavLinks, ResourceNavLink } from "@/components/nav-links";
+import {
+  InvitationsNavLink,
+  NavLinks,
+  ResourceNavLink,
+} from "@/components/nav-links";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { hasEnvVars } from "@/lib/utils";
 import Link from "next/link";
@@ -24,6 +28,9 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
                   synchronous with the account controls beside it. */}
               <Suspense fallback={null}>
                 <ResourceNavLink />
+              </Suspense>
+              <Suspense fallback={null}>
+                <InvitationsNavLink />
               </Suspense>
             </div>
             {!hasEnvVars ? (

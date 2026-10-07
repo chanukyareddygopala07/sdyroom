@@ -85,19 +85,23 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**` — 149 tests covering auth at the API boundary, onboarding
+  over `tests/integration/**` — 193 tests covering auth at the API boundary, onboarding
   and response privacy, RLS/grant behaviour per role, `create_room` atomicity
   (including the revoked-grant rollback), joining and capacity races, the shared focus
   timer state machine, personal-goal privacy, append-only room chat, the whole
   study-resource authorization model (private library, room sharing, revocation on
-  leaving, signed URLs, impersonation of another student's folder, bucket privacy) and
-  live Realtime delivery of `focus_sessions` changes over a real WebSocket. It needs
+  leaving, signed URLs, impersonation of another student's folder, bucket privacy),
+  live Realtime delivery of `focus_sessions` changes over a real WebSocket, and the
+  addressed-invitation lifecycle (create/accept/reject/revoke/expiry, the last-seat
+  accept race, roster denial for non-members, policy and grant freezes). It needs
   the local stack (`npx supabase start && npx supabase db reset`) and never uses a
   service-role key. `passWithNoTests` stays unset, so a missing suite still exits
   non-zero. See `tests/integration/README.md`.
-- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 19 Chromium tests
+- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 26 Chromium tests
   driving the real app (`next dev`) against the local stack: the full two-student
-  workflow through the forms, private-room access, room chat, the upload → share →
+  workflow through the forms, private-room access, room chat, room presence across
+  two browsers, the invitation lifecycle (invite by alias → inbox → accept, stranger
+  negatives, reject/revoke/expiry, a full room), the upload → share →
   revoke → delete file lifecycle through the real upload form, expiry/failure/recovery
   scenarios, and Realtime-vs-polling proven on an intercepted WebSocket (including
   stale and duplicate frame replay). Test users are scoped to a per-run id and deleted
@@ -133,12 +137,13 @@ unique study alias once, then discover public rooms and create your own.
 | `/onboarding` | signed in | One-time study alias via `POST /api/profile` |
 | `/rooms` | signed in | Public room discovery with a `?q=` search over name, subject and exam track; rooms you belong to link straight into their workspace |
 | `/rooms/new` | signed in, alias chosen | Create a room via `POST /api/rooms` and enter its workspace |
+| `/invitations` | signed in | Your invitation inbox: accept or reject invitations addressed to your alias |
 | `GET /api/rooms` | signed in | Shaped public rooms, `401` when unauthenticated |
 | `POST /api/profile` | signed in | Creates the profile row, `409 alias_taken` on a case-insensitive collision |
 | `POST /api/rooms` | signed in, alias chosen | `401` / `400 validation` / `403 onboarding_required` / `201` |
 | `POST /api/rooms/[id]/join` | signed in | `201 joined` / `200 already_member`; `404 not_found` for a missing or private room, `409 room_closed` / `room_full`, `400` for a non-UUID id or any field in the body |
 | `POST /api/rooms/[id]/leave` | signed in | `200 left`; `404 not_found`, `409 owner_cannot_leave` / `not_a_member`, `400` as above |
-| `/rooms/[id]` | signed in, member | The study workspace: shared focus timer, recent sessions, the caller's own goals, room chat and the files shared into the room |
+| `/rooms/[id]` | signed in, member | The study workspace: member roster, shared focus timer, recent sessions, the caller's own goals, room chat and the files shared into the room; owners of private rooms also get the invite panel |
 | `GET /api/rooms/[id]/workspace` | signed in, member | `{ room, session, viewer_role, server_now_ms, member_count, history }`; `404 not_found` for a non-member *and* a missing room (indistinguishable) |
 | `POST /api/rooms/[id]/session/start` | room owner | `201 started` / `200 already_active` (one active session per room, races included); `403 not_owner`, `404 not_found`, `400 validation` for a duration outside 60–7200 s |
 | `POST /api/rooms/[id]/session/pause` / `resume` / `end` | room owner | `200 paused` / `resumed` / `completed`; `409 no_active_session` / `invalid_state`, `403 not_owner`, `400 invalid_request` for a body carrying fields |
@@ -146,6 +151,12 @@ unique study alias once, then discover public rooms and create your own.
 | `POST /api/rooms/[id]/goals` | signed in, member | `201 { goal }`; `409 duplicate_goal` while an active goal with the same title exists |
 | `PATCH` / `DELETE /api/goals/[goalId]` | goal owner | `200 { goal }` / `200 { deleted: true }`; `404 not_found` for anyone else's goal, `400 invalid_request` for an empty `PATCH` |
 | `GET` / `POST /api/rooms/[id]/messages` | signed in, member | Chat history (newest page first, `before=` cursor on the monotonic `seq`) / `201` append; `404 not_found` for a non-member; the sender id always comes from the session |
+| `POST` / `GET /api/rooms/[id]/invitations` | room owner | Invite a student **by alias** (`{ invitee_alias, ttl_hours? }`, 1–168 h) → `201`; list the room's invitations → `200`. `403 not_owner`, `404 not_found` / `invitee_not_found`, `409 room_public` / `self_invite` / `already_member` / `already_invited` |
+| `DELETE /api/rooms/[id]/invitations/[invitationId]` | room owner | `200 { revoked: true }`; an already-resolved invitation (or a second revoke) is `404 not_found`, indistinguishable |
+| `GET /api/invitations` | signed in | The caller's invitation inbox (rows addressed to them), newest first |
+| `POST /api/invitations/[id]/accept` | the invitee | Empty body; `201 joined` / `200 already_member` (the invitation is consumed either way); `404` for anything not addressed to you, `409 used` / `rejected` / `revoked` / `room_full` / `room_closed`, `410 expired` |
+| `POST /api/invitations/[id]/reject` | the invitee | Empty body → `200 { rejected: true }`; same `404` / `409` / `410` map as accept |
+| `GET /api/rooms/[id]/members` | signed in, member | `{ members: [{ alias, role, joined_at }], count }` — the roster; `404 not_found` for a non-member, and no user ids or emails in the payload |
 | `/resources` | signed in | The personal library: upload, search and filter your own files, open them through a short-lived signed URL, delete them |
 | `GET /api/resources` | signed in | `?scope=personal` (default) or `?room_id=<uuid>`, plus `q` / `subject` / `chapter` / `limit` / `offset`; `400` for both `scope` and `room_id` or a bad value, `404` for a room you have left |
 | `POST /api/resources` | signed in | multipart upload → `201`; `400` `validation` / `invalid_request` / `invalid_filename` / `empty_file` / `malformed_file`, `413 file_too_large`, `415 unsupported_file_type`, `404` for a room you are not in, `500` `storage_upload_failed` / `metadata_failed` |
@@ -180,7 +191,8 @@ endpoint accepts an owner id, a content type or a storage path from the client
 (an `owner_id` in the upload body is a `400 invalid_request`, not a value that
 quietly goes nowhere). The content type comes from sniffing the first bytes
 server-side, so a file cannot claim to be a PDF it is not, and deletion is the
-uploader's alone. `docs/API_CONTRACTS.md` holds the endpoint contracts and
+uploader's alone. `docs/ARCHITECTURE.md` is the map of how the layers fit
+together, `docs/API_CONTRACTS.md` holds the endpoint contracts and
 `docs/SECURITY.md` the threat model behind them.
 
 How the pieces fit together:
@@ -233,6 +245,16 @@ How the pieces fit together:
   membership, so a direct PostgREST or Storage call obeys exactly what the app
   obeys. `owner_id` holds no grant at all, and `storage_path` is excluded from the
   response column list.
+- **Invitations and the roster**: `lib/invitations/` addresses each invitation to
+  one student's alias — there is no token, link or invite URL, so nothing can be
+  forwarded or enumerated, and every transition re-derives `auth.uid()` inside a
+  `SECURITY DEFINER` RPC (`0007`). The table is read-only for clients (no write
+  grant), expiry is evaluated at read time (`410`, never a stored state), at most
+  one pending invitation per (room, invitee) is allowed by a partial unique index,
+  and acceptance seats through the same row-locked capacity code as `join_room`
+  with a private gate no client can execute. The roster reads through the
+  membership-checked `room_roster` RPC — `room_members` visibility is unchanged —
+  and annotates rows with live presence from the PR 06 channel.
 - **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
   } }`, built by `lib/api/responses.ts`.
 

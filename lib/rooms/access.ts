@@ -42,3 +42,48 @@ export async function requireRoomMembership(
     throw new RoomAccessError(ROOM_MISSING);
   }
 }
+
+/** Failure for a member who is not the room's owner. */
+export class RoomOwnerError extends Error {
+  readonly code: "not_owner";
+  readonly status: 403;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "RoomOwnerError";
+    this.code = "not_owner";
+    this.status = 403;
+  }
+}
+
+/**
+ * Confirms the caller is the owner of a room they are already a member of.
+ *
+ * The query reads only the caller's own row (`room_members_select_own`), so
+ * a non-member matches nothing and gets the same 404 as
+ * {@link requireRoomMembership} — the room's existence is not revealed by
+ * asking whether you own it. A member who is not the owner gets 403: they
+ * already know the room exists, so there is nothing left to hide.
+ */
+export async function requireRoomOwner(
+  client: SupabaseClient,
+  roomId: string,
+): Promise<void> {
+  const { data, error } = await client
+    .from("room_members")
+    .select("role")
+    .eq("room_id", roomId)
+    .limit(1);
+
+  if (error) {
+    throw new Error(`membership check failed: ${error.message}`);
+  }
+
+  if (!data || data.length === 0) {
+    throw new RoomAccessError(ROOM_MISSING);
+  }
+
+  if (data[0].role !== "owner") {
+    throw new RoomOwnerError("Only the room owner can manage invitations.");
+  }
+}
