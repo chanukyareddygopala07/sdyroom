@@ -1,6 +1,7 @@
 "use client";
 
 import { ChatPanel } from "@/components/chat-panel";
+import { ReportDialog } from "@/components/report-dialog";
 import { clearRoomPresence, publishRoomPresence } from "@/lib/chat/presence-store";
 import { toChatMessageView } from "@/lib/chat/queries";
 import {
@@ -77,9 +78,14 @@ function browserIsOffline(): boolean {
 export function RoomChat({
   roomId,
   initialMessages,
+  viewerMuted = false,
+  mutedUntil = null,
 }: {
   roomId: string;
   initialMessages: ChatMessageView[];
+  /** Server-read mute state for this viewer — disables the composer. */
+  viewerMuted?: boolean;
+  mutedUntil?: string | null;
 }) {
   const router = useRouter();
   const [messages, setMessages] = useState<ChatMessageView[]>(initialMessages);
@@ -171,10 +177,17 @@ export function RoomChat({
         }
 
         const payload = (await response.json().catch(() => null)) as
-          | { message?: ChatMessageView }
+          | { message?: ChatMessageView; error?: { code?: string } }
           | null;
         const message = payload?.message;
         if (!response.ok || !message) {
+          // A send refused because this viewer is muted is a state change
+          // the page has not re-rendered yet: refresh so the composer picks
+          // up the server's mute verdict instead of offering another retry
+          // that would fail the same way.
+          if (payload?.error?.code === "muted") {
+            router.refresh();
+          }
           throw new Error("send rejected");
         }
 
@@ -433,13 +446,32 @@ export function RoomChat({
     }
   }, [studying]);
 
+  const [reportTarget, setReportTarget] = useState<ChatMessageView | null>(
+    null,
+  );
+
   return (
-    <ChatPanel
-      messages={messages}
-      connection={connection}
-      participants={participants}
-      onSend={handleSend}
-      onRetrySend={handleRetrySend}
-    />
+    <>
+      <ChatPanel
+        messages={messages}
+        connection={connection}
+        participants={participants}
+        muted={viewerMuted}
+        mutedUntil={mutedUntil}
+        onSend={handleSend}
+        onRetrySend={handleRetrySend}
+        onReportMessage={setReportTarget}
+      />
+      {reportTarget !== null && (
+        <ReportDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) setReportTarget(null);
+          }}
+          roomId={roomId}
+          subject={{ type: "message", id: reportTarget.id }}
+        />
+      )}
+    </>
   );
 }

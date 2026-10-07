@@ -1,5 +1,6 @@
 import { FocusTimer } from "@/components/focus-timer";
 import { GoalsPanel } from "@/components/goals-panel";
+import { ModerationInbox } from "@/components/moderation-inbox";
 import { ResourceLibrary } from "@/components/resources/resource-library";
 import { RoomChat } from "@/components/room-chat";
 import { RoomInvitePanel } from "@/components/room-invite-panel";
@@ -16,6 +17,12 @@ import {
   RosterDeniedError,
   roomRoster,
 } from "@/lib/invitations/queries";
+import { ModerationError } from "@/lib/moderation/errors";
+import {
+  getRoomModerationInfo,
+  listBlocks,
+  listReports,
+} from "@/lib/moderation/queries";
 import { listResources } from "@/lib/resources/queries";
 import { createClient } from "@/lib/supabase/server";
 import { MESSAGE_PAGE_SIZE_DEFAULT } from "@/lib/validation/chat";
@@ -111,6 +118,37 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
   }
   const members = membersOrNull;
 
+  // Moderation surface for this room, read once here and passed down: who
+  // may act (the API re-proves it per call), who is muted, the viewer's own
+  // block list, and — for owner/moderators — the seeded inbox. Any moderation
+  // denial means the seat vanished between the reads above: same verdict as
+  // everywhere else on this page, notFound.
+  const moderation = await getRoomModerationInfo(
+    supabase,
+    parsedRoomId.data,
+  ).catch((error: unknown) => {
+    if (error instanceof ModerationError) {
+      notFound();
+    }
+    throw error;
+  });
+  const [blockedRows, viewerProfile] = await Promise.all([
+    listBlocks(supabase),
+    supabase
+      .from("profiles")
+      .select("alias")
+      .eq("id", viewerId)
+      .maybeSingle(),
+  ]);
+  const viewerAlias =
+    typeof viewerProfile.data?.alias === "string"
+      ? viewerProfile.data.alias
+      : "";
+  const blockedAliases = blockedRows.map((row) => row.alias);
+  const initialReports = moderation.can_moderate
+    ? await listReports(supabase, parsedRoomId.data, 50)
+    : [];
+
   // Invitations exist for private rooms only, and only the owner manages
   // them; the owner's pending rows are read through the same RLS that
   // restricts them to the rows this viewer created, and only rows that are
@@ -172,7 +210,22 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
         key={`roster-${room.id}`}
         roomId={room.id}
         members={members}
+        moderation={moderation}
+        viewerAlias={viewerAlias}
+        canAppoint={viewer_role === "owner"}
+        blockedAliases={blockedAliases}
       />
+
+      {/* Owner/moderator only — the page's `can_moderate` decides whether it
+          renders at all, and the inbox's own API calls re-prove moderator
+          rights server-side on every transition. */}
+      {moderation.can_moderate && (
+        <ModerationInbox
+          key={`inbox-${room.id}`}
+          roomId={room.id}
+          initialReports={initialReports}
+        />
+      )}
 
       {showInvitePanel && (
         <RoomInvitePanel
@@ -203,7 +256,13 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
       {/* Keyed per room so a room switch cannot show the previous room's
           messages or connection badge while the new channel joins. Distinct
           key prefix for the same reason as the timer above. */}
-      <RoomChat key={`chat-${room.id}`} roomId={room.id} initialMessages={messages} />
+      <RoomChat
+        key={`chat-${room.id}`}
+        roomId={room.id}
+        initialMessages={messages}
+        viewerMuted={moderation.viewer_is_muted}
+        mutedUntil={moderation.muted_until}
+      />
 
       {/* Same keying rationale: files from another room must never be listed
           while the new room's request is still in flight. */}

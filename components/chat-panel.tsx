@@ -52,9 +52,12 @@ export function ChatPanel({
   connection,
   loading = false,
   loadError = null,
+  muted = false,
+  mutedUntil = null,
   onRetryLoad,
   onSend,
   onRetrySend,
+  onReportMessage,
   participants,
 }: {
   messages: ChatMessageView[];
@@ -63,11 +66,24 @@ export function ChatPanel({
   loading?: boolean;
   /** History read failed; shown with a retry when `onRetryLoad` is given. */
   loadError?: string | null;
+  /**
+   * The viewer is muted in this room: the composer disables itself and the
+   * server would refuse the send anyway (403 `muted`) — the note here only
+   * saves the round trip and explains why.
+   */
+  muted?: boolean;
+  /** When the current mute ends (ISO timestamp), for the composer note. */
+  mutedUntil?: string | null;
   onRetryLoad?: () => void;
   /** Hand off a trimmed message body; the owner persists it. */
   onSend: (body: string) => void;
   /** Re-send a failed message; owner flips it back to `pending`. */
   onRetrySend?: (id: string) => void;
+  /**
+   * Open the report dialog for someone else's message. Absent when the
+   * surface has no dialog to host — the button simply does not render.
+   */
+  onReportMessage?: (message: ChatMessageView) => void;
   /**
    * The observed roster, or nothing while presence has not synced yet —
    * `undefined` keeps the section hidden rather than flashing an empty room.
@@ -116,7 +132,8 @@ export function ChatPanel({
   const canSend =
     draft.trim().length > 0 &&
     draft.length <= CHAT_MESSAGE_MAX_LENGTH &&
-    connection !== "unavailable";
+    connection !== "unavailable" &&
+    !muted;
 
   // The header count is a second live region beside the connection badge:
   // joins and leaves are announced without moving focus. It only appears
@@ -281,6 +298,18 @@ export function ChatPanel({
                         )}
                       </span>
                     )}
+                    {!message.is_own && message.status === "sent" && onReportMessage && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 self-start px-2 text-xs text-muted-foreground"
+                        aria-label={`Report message from ${message.alias}`}
+                        onClick={() => onReportMessage(message)}
+                      >
+                        Report
+                      </Button>
+                    )}
                   </li>
                 );
               })}
@@ -299,6 +328,15 @@ export function ChatPanel({
       )}
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-2 border-t pt-4">
+        {muted && (
+          <p role="status" className="text-sm text-amber-600">
+            You are muted in this room
+            {mutedUntil
+              ? ` until ${mutedUntil.slice(0, 16).replace("T", " ")} UTC`
+              : ""}
+            . You can read the chat, but you cannot send messages.
+          </p>
+        )}
         <div className="flex flex-wrap items-end gap-2">
           <Textarea
             value={draft}
@@ -306,8 +344,9 @@ export function ChatPanel({
             onKeyDown={handleKeyDown}
             aria-label="Message"
             aria-describedby={hintId}
-            placeholder="Message the room…"
+            placeholder={muted ? "You cannot send messages right now" : "Message the room…"}
             maxLength={CHAT_MESSAGE_MAX_LENGTH}
+            disabled={muted}
             className="min-h-16 min-w-44 flex-1 resize-y"
           />
           <Button type="submit" size="sm" disabled={!canSend}>

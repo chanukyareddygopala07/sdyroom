@@ -1,5 +1,6 @@
 "use client";
 
+import { ReportDialog } from "@/components/report-dialog";
 import { ResourceUploadForm } from "@/components/resources/resource-upload-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -108,6 +109,7 @@ export function ResourceLibrary({
   const [notice, setNotice] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [reportId, setReportId] = useState<string | null>(null);
 
   /**
    * Loads a page of resources.
@@ -475,6 +477,22 @@ export function ResourceLibrary({
                         Delete
                       </Button>
                     )}
+
+                    {isRoom && !isConfirming && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={isBusy}
+                        aria-label={`Report ${resource.title}`}
+                        onClick={() => {
+                          setActionError(null);
+                          setReportId(resource.id);
+                        }}
+                      >
+                        Report
+                      </Button>
+                    )}
                   </div>
                 </li>
               );
@@ -496,6 +514,17 @@ export function ResourceLibrary({
             </div>
           )}
         </>
+      )}
+
+      {scope.kind === "room" && reportId !== null && (
+        <ReportDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) setReportId(null);
+          }}
+          roomId={scope.roomId}
+          subject={{ type: "resource", id: reportId }}
+        />
       )}
     </section>
   );
