@@ -85,20 +85,24 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**` — 109 tests covering auth at the API boundary, onboarding
+  over `tests/integration/**` — 149 tests covering auth at the API boundary, onboarding
   and response privacy, RLS/grant behaviour per role, `create_room` atomicity
   (including the revoked-grant rollback), joining and capacity races, the shared focus
-  timer state machine, personal-goal privacy, and live Realtime delivery of
-  `focus_sessions` changes over a real WebSocket. It needs the local stack
-  (`npx supabase start && npx supabase db reset`) and never uses a service-role key.
-  `passWithNoTests` stays unset, so a missing suite still exits non-zero.
-  See `tests/integration/README.md`.
-- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 12 Chromium tests
+  timer state machine, personal-goal privacy, append-only room chat, the whole
+  study-resource authorization model (private library, room sharing, revocation on
+  leaving, signed URLs, impersonation of another student's folder, bucket privacy) and
+  live Realtime delivery of `focus_sessions` changes over a real WebSocket. It needs
+  the local stack (`npx supabase start && npx supabase db reset`) and never uses a
+  service-role key. `passWithNoTests` stays unset, so a missing suite still exits
+  non-zero. See `tests/integration/README.md`.
+- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 19 Chromium tests
   driving the real app (`next dev`) against the local stack: the full two-student
-  workflow through the forms, private-room access, expiry/failure/recovery scenarios,
-  and Realtime-vs-polling proven on an intercepted WebSocket (including stale and
-  duplicate frame replay). Test users are scoped to a per-run id and deleted by the
-  global teardown. It needs the local stack plus `npx playwright install chromium`.
+  workflow through the forms, private-room access, room chat, the upload → share →
+  revoke → delete file lifecycle through the real upload form, expiry/failure/recovery
+  scenarios, and Realtime-vs-polling proven on an intercepted WebSocket (including
+  stale and duplicate frame replay). Test users are scoped to a per-run id and deleted
+  by the global teardown (which also removes this run's storage objects before its
+  `auth.users` rows). It needs the local stack plus `npx playwright install chromium`.
   See `tests/e2e/README.md`.
 - `.github/workflows/ci.yml` runs all three suites on every push and pull request: a
   `quality` job (lint, types, unit tests, build — no env or secrets) and — each after
@@ -113,8 +117,9 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
 The database foundation runs entirely locally through the pinned CLI
 (`npx supabase start`), with Postgres on port **54322** — never the Homebrew server on
 5432. See [docs/local-supabase.md](docs/local-supabase.md) for the schema, grants, RLS
-policies, the `create_room` RPC, how owner-membership atomicity is enforced, and the
-verification commands.
+policies, the private `study-resources` bucket and its storage policies, the
+`create_room` RPC, how owner-membership atomicity is enforced, and the verification
+commands.
 
 ## Application
 
@@ -133,13 +138,19 @@ unique study alias once, then discover public rooms and create your own.
 | `POST /api/rooms` | signed in, alias chosen | `401` / `400 validation` / `403 onboarding_required` / `201` |
 | `POST /api/rooms/[id]/join` | signed in | `201 joined` / `200 already_member`; `404 not_found` for a missing or private room, `409 room_closed` / `room_full`, `400` for a non-UUID id or any field in the body |
 | `POST /api/rooms/[id]/leave` | signed in | `200 left`; `404 not_found`, `409 owner_cannot_leave` / `not_a_member`, `400` as above |
-| `/rooms/[id]` | signed in, member | The study workspace: shared focus timer, recent sessions and the caller's own goals |
+| `/rooms/[id]` | signed in, member | The study workspace: shared focus timer, recent sessions, the caller's own goals, room chat and the files shared into the room |
 | `GET /api/rooms/[id]/workspace` | signed in, member | `{ room, session, viewer_role, server_now_ms, member_count, history }`; `404 not_found` for a non-member *and* a missing room (indistinguishable) |
 | `POST /api/rooms/[id]/session/start` | room owner | `201 started` / `200 already_active` (one active session per room, races included); `403 not_owner`, `404 not_found`, `400 validation` for a duration outside 60–7200 s |
 | `POST /api/rooms/[id]/session/pause` / `resume` / `end` | room owner | `200 paused` / `resumed` / `completed`; `409 no_active_session` / `invalid_state`, `403 not_owner`, `400 invalid_request` for a body carrying fields |
 | `GET /api/rooms/[id]/goals` | signed in, member | The caller's own goals in that room — never another member's; `404 not_found` for a non-member |
 | `POST /api/rooms/[id]/goals` | signed in, member | `201 { goal }`; `409 duplicate_goal` while an active goal with the same title exists |
 | `PATCH` / `DELETE /api/goals/[goalId]` | goal owner | `200 { goal }` / `200 { deleted: true }`; `404 not_found` for anyone else's goal, `400 invalid_request` for an empty `PATCH` |
+| `GET` / `POST /api/rooms/[id]/messages` | signed in, member | Chat history (newest page first, `before=` cursor on the monotonic `seq`) / `201` append; `404 not_found` for a non-member; the sender id always comes from the session |
+| `/resources` | signed in | The personal library: upload, search and filter your own files, open them through a short-lived signed URL, delete them |
+| `GET /api/resources` | signed in | `?scope=personal` (default) or `?room_id=<uuid>`, plus `q` / `subject` / `chapter` / `limit` / `offset`; `400` for both `scope` and `room_id` or a bad value, `404` for a room you have left |
+| `POST /api/resources` | signed in | multipart upload → `201`; `400` `validation` / `invalid_request` / `invalid_filename` / `empty_file` / `malformed_file`, `413 file_too_large`, `415 unsupported_file_type`, `404` for a room you are not in, `500` `storage_upload_failed` / `metadata_failed` |
+| `GET /api/resources/[id]/download` | signed in, can read it | `200 { url, expires_in: 300, resource_id }` — authorization is re-checked on every call; `404 not_found` for a missing, deleted or foreign file |
+| `DELETE /api/resources/[id]` | uploader | `200 { deleted: true }`; object removed before the row; `404 not_found` for anyone else's file, `500 cleanup_failed` / `delete_failed` |
 
 Both membership endpoints take an empty body on purpose: the user is read from the
 session, and a body that carries a `user_id` is rejected with `400 invalid_request`
@@ -157,6 +168,20 @@ DEFINER` RPCs, so a direct `INSERT`/`UPDATE` cannot start a session or rewind a
 deadline. Goals are personal — RLS narrows `study_goals` to `user_id = auth.uid()`,
 so even the room owner cannot read anyone else's titles, and `completed_at` is written
 by a trigger rather than accepted from a client.
+
+Files follow the same rule. A *resource* is a PDF, a scan of handwritten notes
+or a plain-text/Markdown note, and it is **private by default**: `room_id IS
+NULL` means only the uploader ever reads it, while a non-null `room_id` shares
+it with that room's *current* members — leaving the room revokes access on the
+next query without a single file being moved. Nothing is ever public: the
+`study-resources` bucket is `public = false`, a download is a 300-second signed
+URL issued only after the server re-checks ownership or membership, and no
+endpoint accepts an owner id, a content type or a storage path from the client
+(an `owner_id` in the upload body is a `400 invalid_request`, not a value that
+quietly goes nowhere). The content type comes from sniffing the first bytes
+server-side, so a file cannot claim to be a PDF it is not, and deletion is the
+uploader's alone. `docs/API_CONTRACTS.md` holds the endpoint contracts and
+`docs/SECURITY.md` the threat model behind them.
 
 How the pieces fit together:
 
@@ -191,6 +216,23 @@ How the pieces fit together:
   unique index on `(user_id, room_id, lower(title)) where status = 'active'` yields
   `409 duplicate_goal`, the title frees up on completion, and a trigger owns
   `completed_at` / `updated_at`.
+- **Room chat**: `lib/chat/` seeds history from the workspace page and appends
+  through `POST /api/rooms/[id]/messages`; `room_messages` is append-only (only
+  `SELECT`/`INSERT` are granted), the sender is pinned to `auth.uid()` by RLS and
+  never returned as an id — the API maps it onto the viewer-relative `is_own` — and
+  `seq` gives a stable total order for `before=` cursor pagination. Rows reach
+  members over `supabase_realtime`, with RLS applied at delivery, and the client
+  deduplicates by id because a send can be confirmed by both the POST response and
+  its own event.
+- **Study resources**: `lib/resources/` validates the file (magic bytes, 20 MiB
+  ceiling, filename shape, unknown multipart parts rejected outright), builds the
+  storage key from server-generated UUIDs only, and writes the object *before* the
+  metadata row — a failed insert rolls the object back, so no orphan is advertised.
+  The same scope is enforced twice, independently: table RLS for the metadata and
+  storage RLS for the bytes, both derived from `auth.uid()` and current room
+  membership, so a direct PostgREST or Storage call obeys exactly what the app
+  obeys. `owner_id` holds no grant at all, and `storage_path` is excluded from the
+  response column list.
 - **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
   } }`, built by `lib/api/responses.ts`.
 

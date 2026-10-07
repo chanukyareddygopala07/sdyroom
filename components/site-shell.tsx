@@ -1,5 +1,6 @@
 import { AuthButton } from "@/components/auth-button";
 import { EnvVarWarning } from "@/components/env-var-warning";
+import { NavLinks, ResourceNavLink } from "@/components/nav-links";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { hasEnvVars } from "@/lib/utils";
 import Link from "next/link";
@@ -18,12 +19,12 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
           <div className="flex w-full max-w-5xl items-center justify-between p-3 px-5 text-sm">
             <div className="flex items-center gap-5 font-semibold">
               <Link href="/">SdyRoom</Link>
-              <Link
-                href="/rooms"
-                className="font-normal text-muted-foreground hover:text-foreground"
-              >
-                Public rooms
-              </Link>
+              <NavLinks />
+              {/* Session read: deferred so prerendering the landing page stays
+                  synchronous with the account controls beside it. */}
+              <Suspense fallback={null}>
+                <ResourceNavLink />
+              </Suspense>
             </div>
             {!hasEnvVars ? (
               <EnvVarWarning />

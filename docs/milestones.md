@@ -12,6 +12,8 @@ Working log: what has landed, what each milestone still owes.
 | F — public room joining and capacity enforcement | `f6c6411` | done |
 | G — shared study workspace, synchronized focus timers and personal goals | `1937e16` | done |
 | H — browser end-to-end suite and realtime reliability | `9a98a4a`–`ebcc16e` | done |
+| Room chat — `0004_room_messages.sql`, messages API, realtime wiring, workspace mount | `e0e4eb2` | done |
+| I — private notes and PDF sharing: `0005_study_resources.sql`, private storage bucket, resource APIs, personal/room library | `feat/private-notes-library` | in progress |
 
 ## Milestone D — task breakdown
 
@@ -290,6 +292,91 @@ Working log: what has landed, what each milestone still owes.
       from a cold realtime service, teardown removing every run user — `auth.users`
       back to 0).
 
+## Milestone I — task breakdown
+
+- [x] Preflight — clean tree at `origin/main` (`511bbeb`), local stack running and
+      unlinked, migrations `0001`–`0004` already applied, baseline gates green
+      (lint 0, `tsc` 0, 363 unit tests), and a read-only survey of what the storage
+      API actually does before encoding it: `storage.foldername()` excludes the
+      filename (so the two key layouts resolve to array lengths 2 and 3),
+      `storage.protect_delete()` refuses a plain `delete from storage.objects`
+      unless the session sets `storage.allow_delete_query = 'true'`, and
+      `storage.remove()` reports **no** error when RLS filters every row out — so
+      the tests assert object survival, never `remove()`'s return value.
+- [x] Design locked — private `study-resources` bucket; key layout
+      `personal/{owner}/{id}{ext}` / `rooms/{room}/{owner}/{id}{ext}`; download =
+      JSON signed URL with `DOWNLOAD_TTL_SECONDS = 300`; DELETE = ownership
+      pre-check → remove object → delete row; and explicitly *out*: rate limiting,
+      malware scanning, a `PATCH` endpoint, and any runtime use of a service-role
+      key.
+- [x] `supabase/migrations/0005_study_resources.sql` — table with CHECKs for title,
+      filename, content type and size, the regex key-layout CHECK and a separate
+      `room_id ⇔ personal/` agreement CHECK, two scope indexes plus a unique
+      `storage_path`, the `study_resources_touch` trigger (`updated_at`), a
+      revoke-first grant matrix in which `owner_id` appears in **no** verb (not
+      even `SELECT`) and `storage_path` is `SELECT`+`INSERT` only, four table
+      policies, the bucket insert (`public = false`, 20 MiB, five allowed MIME
+      types, idempotent), and three storage policies keyed off `storage.foldername()`
+      segment counts with **no** `UPDATE` policy at all. Applied with
+      `npx supabase db reset`; `0001`–`0004` never edited.
+- [x] Contract first — `docs/API_CONTRACTS.md`: resource shape, limits, the
+      sniffing table, all four endpoints with status/code tables, the server-side
+      upload sequence, and a "not implemented, on purpose" table so the gaps are
+      documented instead of assumed.
+- [x] Lib layer — `lib/validation/resources.ts` (list query, metadata, id) and
+      `lib/resources/{types,files,shape,queries,storage,upload}.ts`: an explicit
+      response column list, magic-byte/UTF-8 validation, multipart parsing that
+      **rejects unknown parts** rather than ignoring them, `has_more` from an
+      exact count, server-built keys with `isOwnedBy()`, and absolute URLs taken
+      only from `NEXT_PUBLIC_SUPABASE_URL`.
+- [x] API — `GET`/`POST /api/resources`, `GET /api/resources/[id]/download`,
+      `DELETE /api/resources/[id]`. Session first, then a `content-length` refusal
+      over 20 MiB + 256 KiB before the body is buffered, membership confirmed
+      before any room-scoped read or write, object written before the row with an
+      orphan-object rollback, object removed before the row on delete, and one
+      `404` for both "missing" and "not yours".
+- [x] Security probe — 28 checks against the real stack with real users (probe
+      users and the probe file removed afterwards): cross-user list/download/delete,
+      a direct PostgREST insert with a forged `owner_id`, a direct object write
+      into another student's folder, an unsigned fetch, a non-member listing, and
+      bucket privacy. Every one refused with the documented status.
+- [x] UI — `ResourceUploadForm` (XHR with a real progress bar, server messages in
+      `role="alert"`), `ResourceLibrary` (draft vs applied filters, a separate
+      `loadingMore` state for "Show more", inline delete confirmation, download
+      that treats `401` as "sign in again"), `/resources` plus its `error.tsx`,
+      `ResourceLibrary` mounted in the room workspace at `level={2}`, and a
+      session-aware "My resources" nav link wrapped in `<Suspense>` — without that
+      wrapper the `/` landing page fails to prerender.
+- [x] Tests — 158 new unit tests taking `npm test` from 363 → **521** across 41
+      files (validators, path/ownership, queries, all three routes including every
+      error branch, the upload form and the library);
+      `tests/integration/study-resources.test.ts` (22) taking the integration suite
+      127 → **149**; `tests/e2e/resources.spec.ts` (5) taking e2e 12 → **19**, with
+      `tests/e2e/fixtures/` and shared helpers. Shared seams were extended without
+      disturbing existing assertions: `createFakeBuilder` gained
+      `is`/`ilike`/`range`/`selectOptions` and an optional `count` on `FakeResult`
+      (`state.select` stays a `string[]`), `tests/integration/helpers/api.ts` gained
+      `FormData`, `assertSchemaApplied` requires `study_resources`, and the e2e
+      global teardown deletes this run's `storage.objects` first — with
+      `storage.allow_delete_query` set in the same `psql` invocation — because
+      `storage.objects` has no FK to `auth.users` while `storage.prefixes` does not
+      exist.
+- [x] Docs — new `docs/SECURITY.md` (threat model, controls by layer, coverage, and
+      the known limitations: rate limiting and malware scanning are explicitly *not*
+      implemented); `docs/API_CONTRACTS.md` corrected against the shipped behaviour
+      (`has_more` comes from an exact count, the download URL is absolute, the
+      upload sequence includes the `content-length` guard); `docs/local-supabase.md`
+      (schema, grant and RLS rows for `0004` and `0005`, a private-bucket section,
+      refreshed verification counts — 7 tables, 20 policies, `owner_id` holding no
+      privilege); `README.md` (routes table, resource and chat paragraphs, testing
+      counts); this file.
+- [x] Gates — `npm run lint` (0), `npx tsc --noEmit` (0), `npm test` (521 across
+      41 files), `npm run test:integration` (149 across 10 files),
+      `npm run build` (all four resource routes registered, `/resources` dynamic,
+      `/rooms/[id]` still a partial prerender), `npm run test:e2e` (19/19, teardown
+      removing 27 run users and this run's storage objects); then committed on
+      `feat/private-notes-library` and opened as a PR.
+
 ## Not in this milestone
 
 - **Browser coverage arrived in H, API/RLS coverage still leads.** Pages are driven by
@@ -303,6 +390,7 @@ Working log: what has landed, what each milestone still owes.
   can be created, discovered, joined and left — but not renamed, closed from the UI,
   or removed.
 - **No alias editing.** Changing the study alias after onboarding is not built.
-- **No chat, presence or file sharing.** The workspace is the shared timer, the
-  session history and each member's own goals; goals are personal by design and are
-  not part of the realtime publication.
+- **No presence, typing indicators, chat moderation or file previews.** Chat is
+  append-only history (no edit, delete or react); files are downloaded rather than
+  previewed inline, with no versioning, no per-room quota UI and no search beyond
+  the title/subject/chapter filters.

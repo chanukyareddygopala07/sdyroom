@@ -44,8 +44,12 @@ rule set serves both suites.
   emails and the case-insensitively unique alias can never collide across parallel
   workers or concurrent runs.
 - **Teardown.** The global teardown deletes `auth.users where email like
-  'e2e+<runId>%'` in one statement; profiles, rooms, memberships, sessions and goals
-  cascade with them. The count is selected from a CTE (`with removed as (delete …
+  'e2e+<runId>%'` in one statement; profiles, rooms, memberships, sessions, goals,
+  messages and study resources cascade with them. `storage.objects` does **not**
+  cascade (no FK to `auth.users`), so the run's own objects are removed first — with
+  `set storage.allow_delete_query='true'` in the same `psql` invocation, because
+  `storage.protect_delete()` refuses a plain `delete from storage.objects` — and only
+  then the users. The count is selected from a CTE (`with removed as (delete …
   returning 1) select count(*)`) because a plain `delete … returning` makes psql append
   a `DELETE n` status line that corrupts the parse. Run ids are fixed length, so the
   prefix cannot overlap a different run's users.
@@ -109,8 +113,11 @@ Three techniques make the realtime assertions structural rather than timing-base
 | `private-room.spec.ts` | A private room is invisible to discovery; the owner enters their own workspace while non-members are refused |
 | `access-expiry.spec.ts` | Signed-out redirects, indistinguishable 404s, full/closed rooms, owner-only controls, API abort + retry surfacing in the UI, an expired deadline recorded by a read, and session loss clearing access |
 | `realtime.spec.ts` | A start reaches the member over WebSocket without a reload (frame + poll-phase proof), a dropped socket reports `Reconnecting…` and recovers, and stale/duplicate injected frames cannot corrupt the view |
-| `helpers/` | Shared fixtures: users (sign-up/login/API sign-up), rooms (create/join/leave/search, selector anchors, sync status), realtime capture/injection and workspace-read counting |
-| `global-setup.ts` / `global-teardown.ts` | Environment guard reuse; per-run user cleanup |
+| `chat.spec.ts` | Chat history seeded into the workspace, a message sent through the real form appearing for the member over realtime, and the connection badge staying honest offline |
+| `resources.spec.ts` | A file uploaded through the real form into the personal library, searchable and openable by its owner only, shared into a room and read by a member, refused for a non-member, then deleted — row and object both gone |
+| `helpers/` | Shared fixtures: users (sign-up/login/API sign-up), rooms (create/join/leave/search, selector anchors, sync status), resources (multipart bytes, row lookups, upload through the form, library anchors), realtime capture/injection and workspace-read counting |
+| `fixtures/` | Tiny on-disk files the upload tests send: a real `%PDF-` document and an impostor `.pdf` that is plain text |
+| `global-setup.ts` / `global-teardown.ts` | Environment guard reuse; per-run user cleanup, after this run's `storage.objects` rows (which have no FK to `auth.users`) |
 
 ## CI
 
