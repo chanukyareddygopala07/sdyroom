@@ -65,4 +65,13 @@ describe("RoomCard", () => {
       screen.getByRole("button", { name: "Join Calculus Study Room" }),
     ).toBeInTheDocument();
   });
+
+  it("labels the status badge in sentence case", () => {
+    const { unmount } = render(<RoomCard room={summary({ status: "open" })} />);
+    expect(screen.getByText("Open")).toBeInTheDocument();
+    unmount();
+
+    render(<RoomCard room={summary({ status: "closed" })} />);
+    expect(screen.getByText("Closed")).toBeInTheDocument();
+  });
 });

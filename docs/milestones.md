@@ -446,9 +446,15 @@ Working log: what has landed, what each milestone still owes.
   an invitation never makes it public. Email/phone invitations and invite links
   are deliberately not built (the app collects no contact data); room
   moderation of members (kicking, transfer) is PR 09.
-- **No room editing or deletion.** `rooms` has no `UPDATE`/`DELETE` grant, so a room
-  can be created, discovered, joined and left — but not renamed, closed from the UI,
-  or removed.
+- **Room editing and deletion are owner-only (PR 08).** The mutable fields
+  (name, shared goal, exam track, subject, language, capacity, open/closed
+  status) are edited through `PATCH /api/rooms/[id]` and deleted through
+  `DELETE /api/rooms/[id]` — both RPC-backed, both impossible via direct
+  PostgREST (`rooms` still has no `UPDATE`/`DELETE` grant). Capacity can never
+  go below the current member count, deletion sweeps the room's storage objects
+  first and cascades every dependent row, and `visibility` / ownership remain
+  unchangeable. Ownership transfer and visibility changes are explicit
+  follow-ups.
 - **No alias editing.** Changing the study alias after onboarding is not built.
 - **No typing indicators, chat moderation or file previews.** Chat is
   append-only history (no edit, delete or react); room presence shows who is

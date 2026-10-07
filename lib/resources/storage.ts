@@ -121,6 +121,98 @@ export async function removeResourceObject(
 }
 
 /**
+ * Removes every object under a room's folder — `rooms/{roomId}/**` — before
+ * the room's rows are deleted.
+ *
+ * The sweep lists storage instead of reading `study_resources` paths because
+ * the folder *is* the complete universe of room-scoped objects (the
+ * `study_resources_storage_path_layout` CHECK pins every room row's key
+ * inside this prefix, and personal files live elsewhere), and because listing
+ * runs under the caller's own storage RLS: the owner is a member of their
+ * room, so every key is visible to them. The room's objects may have been
+ * uploaded by any member — which is why 0008 accompanies this with the
+ * room-owner DELETE policy on `storage.objects`; without it, the owner could
+ * read a member's key but not remove it.
+ *
+ * An empty room lists nothing and is a no-op. A partial sweep (some removals
+ * committed, some failed) is safe to re-run: `remove` on an already-gone key
+ * succeeds, so the route's retry converges while the room row still exists.
+ */
+export async function removeRoomStorageObjects(
+  client: SupabaseClient,
+  roomId: string,
+): Promise<void> {
+  const bucket = client.storage.from(RESOURCE_BUCKET);
+  const prefix = `rooms/${roomId}`;
+
+  const { data: entries, error: listError } = await bucket.list(prefix, {
+    limit: 1000,
+  });
+
+  if (listError) {
+    console.error(
+      "[resources/storage] room sweep list failed:",
+      describe(listError),
+    );
+    throw new ResourceError(
+      "cleanup_failed",
+      "The room's files could not be removed. Please try again.",
+      500,
+    );
+  }
+
+  const paths: string[] = [];
+  for (const entry of entries ?? []) {
+    // `id === null` marks a folder in the Storage API. The layout is exactly
+    // rooms/{room}/{uploader}/{file}, so files sit one level down; anything
+    // deeper cannot exist (the CHECK forbids it) and is skipped rather than
+    // trusted.
+    if (entry.id !== null) {
+      continue;
+    }
+    const folderPath = `${prefix}/${entry.name}`;
+    const { data: files, error: folderError } = await bucket.list(folderPath, {
+      limit: 1000,
+    });
+    if (folderError) {
+      console.error(
+        "[resources/storage] room sweep list failed:",
+        describe(folderError),
+      );
+      throw new ResourceError(
+        "cleanup_failed",
+        "The room's files could not be removed. Please try again.",
+        500,
+      );
+    }
+    for (const file of files ?? []) {
+      if (file.id !== null) {
+        paths.push(`${folderPath}/${file.name}`);
+      }
+    }
+  }
+
+  // Chunked so one room with many files never turns into a single oversized
+  // request; a failure after a chunk committed still converges on retry.
+  for (let i = 0; i < paths.length; i += 100) {
+    const { error } = await bucket.remove(paths.slice(i, i + 100));
+    if (error) {
+      console.error(
+        "[resources/storage] room sweep remove failed:",
+        paths.length - i,
+        "keys remaining,",
+        describe(error),
+      );
+      throw new ResourceError(
+        "cleanup_failed",
+        "The room's files could not be removed. Please try again.",
+        500,
+      );
+    }
+  }
+}
+
+/**
  * Issues a short-lived signed URL after authorization has already been
  * re-checked for this call.
  *

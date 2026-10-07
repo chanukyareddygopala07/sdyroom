@@ -28,7 +28,7 @@ Shared conventions:
 
 ---
 
-## Existing endpoints (unchanged by PR 07)
+## Existing endpoints (unchanged by PR 08)
 
 | Method | Path | Summary |
 | --- | --- | --- |
@@ -43,6 +43,89 @@ Shared conventions:
 | `POST` | `/api/rooms/[id]/session/start` · `/pause` · `/resume` · `/end` | Focus timer |
 
 See `README.md` for the full table.
+
+---
+
+## Room management (PR 08)
+
+| Method | Path | Summary |
+| --- | --- | --- |
+| `PATCH` | `/api/rooms/[id]` | Owner-only partial edit of the mutable room fields |
+| `DELETE` | `/api/rooms/[id]` | Owner-only room deletion — storage objects swept first, then one cascading row delete |
+
+Both routes read identity from the session claims, validate the id with
+`roomIdSchema`, and run the owner gate (`requireRoomOwner`) before any write:
+a plain member gets `403 not_owner`, a non-member gets `404 not_found` — the
+same `404` a missing room produces, so neither route is an existence oracle.
+There is no `UPDATE`/`DELETE` grant on `rooms`: every write travels through the
+`update_room` / `delete_room` SECURITY DEFINER RPCs from `0008`.
+
+### Editable field contract
+
+| Field | Rules |
+| --- | --- |
+| `name` | 1–100 chars, trimmed, required when present (blank is a `400`, not a clear) |
+| `shared_goal` | `null` or ≤ 500 chars; a blank string is sent as `null` (clear) |
+| `exam_track` | `null` or ≤ 80 chars |
+| `subject` | `null` or ≤ 80 chars |
+| `language` | `null` or ≤ 40 chars |
+| `capacity` | integer 1–100, and ≥ the current member count (`409 capacity_below_membership` otherwise) |
+| `status` | `open` or `closed` |
+
+Everything else is unaddressable: `owner_id`, `visibility`, `id`,
+`created_at` and `updated_at` are refused by the strict schema (unknown key →
+`400 validation` naming the key), ignored by the RPC's fixed whitelist, and
+denied by the absent column grants — three independent layers. An **empty body
+is `400 invalid_request`** (matching the goals `PATCH` rule); an absent key
+means "unchanged", which stays distinct from an explicit `null` meaning
+"clear".
+
+### `PATCH /api/rooms/[id]`
+
+| Status | Body |
+| --- | --- |
+| 200 | `{ "room": PublicRoom }` — the row re-read from the database after the update, shaped by `toPublicRoom()` (never the caller's input echoed back; `updated_at` is moved by the `0001` trigger) |
+| 400 | `{ "error": { "code": "validation" \| "invalid_json" \| "invalid_request" } }` |
+| 401 | `{ "error": { "code": "unauthenticated" } }` |
+| 403 | `{ "error": { "code": "not_owner" } }` |
+| 404 | `{ "error": { "code": "not_found" } }` — non-member or missing room |
+| 409 | `{ "error": { "code": "capacity_below_membership", "message": "…current member count (n)…" } }` — capacity unchanged |
+| 500 | `{ "error": { "code": "room_update_failed" } }` — no SQL detail leaks |
+
+Repeated identical submissions are `200` again, not an error.
+
+### `DELETE /api/rooms/[id]`
+
+Order of operations (documented in the route docblock):
+
+1. Owner gate — `401` / `404` / `403` before anything is touched.
+2. Sweep `rooms/{roomId}/**` out of the private bucket (`removeRoomStorageObjects`)
+   while the `study_resources` rows the storage policies authorize against still
+   exist — the `0008` room-owner delete policy lets the owner remove
+   member-uploaded objects; a failure here is `500 cleanup_failed` with **every
+   row still in place**, so a retry re-runs the same idempotent sweep.
+3. `delete_room` — one cascading row delete (`room_members`,
+   `focus_sessions`, `study_goals`, `room_messages`, `room_invitations`,
+   `study_resources`) under the room row lock.
+
+| Status | Body |
+| --- | --- |
+| 200 | `{ "deleted": true }` |
+| 400 | `{ "error": { "code": "validation" } }` |
+| 401 | `{ "error": { "code": "unauthenticated" } }` |
+| 403 | `{ "error": { "code": "not_owner" } }` |
+| 404 | `{ "error": { "code": "not_found" } }` — non-member, missing, or already deleted (a repeat DELETE lands here because the memberships that authorize the gate are gone) |
+| 500 | `{ "error": { "code": "cleanup_failed" \| "delete_failed" } }` — room intact, retry converges |
+
+Storage is not transactional with Postgres, so one interleaving cannot be
+closed: an object uploaded *after* the sweep's listing but whose row commits
+*before* `delete_room` is left orphaned in a private bucket — unreachable (no
+row, no membership, no URL) and bounded by two adjacent calls. Objects-before-
+rows was chosen because the inverse would leave rows advertising downloads that
+can never succeed.
+
+A closed room stays in public discovery with a `Closed` badge (members keep
+chat, files, timers and goals; only `join_room` is refused).
 
 ---
 

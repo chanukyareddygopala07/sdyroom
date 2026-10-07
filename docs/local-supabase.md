@@ -115,8 +115,14 @@ Grants are explicit and column-aware (`auto_expose_new_tables = false` in
 | `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` | `SELECT` | `SELECT`, `INSERT`, `DELETE`, `UPDATE (title, target_seconds, target_count, status)` | `SELECT`, `INSERT` | `SELECT` / `INSERT` / `UPDATE (title, subject, chapter)` / `DELETE`, each on an explicit column list — **never `owner_id`** | `SELECT` (whole table — the policy reads `inviter_id`/`invitee_id`, and Postgres checks privileges on every column a policy touches); **no write verb at all** |
 | `service_role` | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges |
 
-**No `UPDATE` or `DELETE` on `rooms` / `room_members`** — those flows are deliberately
-undeveloped. `authenticated` has no table-level `SELECT` on `profiles` by design: only
+**No `UPDATE` or `DELETE` grant on `rooms` / `room_members` — and since `0008`
+that is a deliberate design, not an undeveloped flow.** Room edits and deletion go
+exclusively through the `update_room` / `delete_room` SECURITY DEFINER RPCs
+(granted to `authenticated`, revoked from `anon`/`PUBLIC`), so a direct PostgREST
+write fails with `42501` before any policy is consulted, while ownership, the
+capacity floor and the row lock all live inside one transaction.
+`room_members` writes were already RPC-only (`join_room` / `leave_room` /
+invitation acceptance). `authenticated` has no table-level `SELECT` on `profiles` by design: only
 the approved columns are granted, so application queries must list columns explicitly
 (`select id, alias, ...`); never rely on `SELECT *` for profile responses. When a new
 column is added to `profiles`, grant it only after it is approved.
@@ -168,7 +174,7 @@ focus RPCs.
 | `room_invitations` | `room_invitations_select_addressed` (`0007`) | `invitee_id = auth.uid() or inviter_id = auth.uid()` — a student reads only invitations addressed to them, an owner only the ones they created, and a stranger reads nothing. Every *write* is an RPC, so there is no insert/update/delete policy to widen: the table simply has no write grant |
 | `realtime.messages` | `room_presence_select_member` / `room_presence_insert_member` (`0006`) | the whole of the private-channel gate for `room-presence-{uuid}` topics: `authenticated` only, extension must be `broadcast`/`presence`, and the uuid in the topic must match a current `room_members` row for `auth.uid()` — so a non-member (or an anonymous client) cannot join, cannot confirm a private room exists, and cannot read another room's roster. Realtime's authorization probes run as the caller inside a transaction that rolls back, so nothing is ever written |
 
-Storage objects have their own three policies (next section); they are not listed
+Storage objects have their own four policies (next section); they are not listed
 above because they live on `storage.objects`, not on a table in `public`. The
 `realtime.messages` row **is** listed even though that table lives in the `realtime`
 schema: it carries no data of ours — it is Realtime's authorization surface.
@@ -211,6 +217,7 @@ an oracle).
 | `study_resources_objects_select` | `SELECT` | own `personal/…` key, or any `rooms/{room}/…` key while a `room_members` row exists for `auth.uid()` — the same scope as the table policy, read out of the key |
 | `study_resources_objects_insert` | `INSERT` | `owner = auth.uid()` plus the matching layout, so storage's own record of who wrote the object must agree with the path |
 | `study_resources_objects_delete` | `DELETE` | `owner = auth.uid()` — one member can never remove another's upload by talking to storage directly, and the API can still clean up after a failed metadata insert |
+| `study_resources_objects_delete_room_owner` (`0008`) | `DELETE` | any `rooms/{room}/…` key whose matching `study_resources` row belongs to a room `auth.uid()` **owns** — OR'd with the uploader-only policy above, so the owner can sweep member-uploaded objects when deleting the room, and nothing else. Proven by `tests/integration/room-management.test.ts`: the room owner removes a member's object, a stranger's remove changes nothing, the uploader still can |
 | *(none)* | `UPDATE` | default deny; nothing in the app rewrites an object |
 
 Because the key carries the scope, a hand-written `POST /storage/v1/object/…` is
@@ -335,14 +342,47 @@ column-scoped grants and `user_id = auth.uid()` policies are the whole security
 model, and the `study_goals_touch` trigger owns `updated_at`/`completed_at` on every
 update regardless of the writer.
 
+## Room management functions (`0008_room_management.sql`)
+
+```sql
+update_room(p_room_id uuid, p_changes jsonb) returns jsonb
+delete_room(p_room_id uuid) returns jsonb
+```
+
+- Both `SECURITY DEFINER`, `set search_path = ''`, execute revoked from `PUBLIC`
+  and `anon`, granted to `authenticated` only (verified with
+  `has_function_privilege`: authenticated `t`, anon `f`).
+- `update_room` locks the room row (`select … for update` — the same lock
+  `join_room` takes, which is what serializes a capacity shrink against a
+  concurrent join), re-proves `owner_id = auth.uid()`, validates `status` and
+  `capacity` in SQL as well as in Zod, applies the capacity floor
+  (`new capacity >= (select count(*) from room_members …)`, else the
+  `capacity_below_membership` envelope with the current count), and builds its
+  `set` list from a fixed whitelist — a `p_changes` key that is not on the list
+  (`owner_id`, `visibility`, `id`, `created_at`, `updated_at`, or anything
+  unknown) is ignored, never applied. `updated_at` stays owned by the
+  `rooms_set_updated_at` trigger from `0001`.
+- `delete_room` locks the room row, re-proves ownership, and deletes the row so
+  the six `on delete cascade` foreign keys (`room_members`, `focus_sessions`,
+  `study_goals`, `room_messages`, `room_invitations`, `study_resources`) remove
+  every dependent row in one statement. It does not touch storage: the route
+  sweeps `rooms/{room}/**` **before** calling it, while the metadata rows the
+  storage policies authorize against still exist.
+- Envelope codes: `updated` / `deleted` on success; `room_not_found` (404),
+  `not_owner` (403), `invalid_request` (400), `validation` (400),
+  `capacity_below_membership` (409) on refusal.
+- The migration adds **no** table grants and **no** `public.*` policies — the
+  only DDL privilege change is the fourth storage policy,
+  `study_resources_objects_delete_room_owner`, documented in the section above.
+
 ## Verification performed
 
 All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001 … 0007
-npx supabase migration list --local # 0001 … 0007 present locally
+npx supabase db reset               # exit 0: applied 0001 … 0008
+npx supabase migration list --local # 0001 … 0008 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
@@ -353,8 +393,10 @@ Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
 - 21 table policies on `public.*`, every one `to authenticated` (the 21st is
   `room_invitations_select_addressed` from `0007`); plus the two
   `0006` policies on `realtime.messages` (`room_presence_select_member` /
-  `room_presence_insert_member`) and the 3 storage policies on `storage.objects`
-  for `study-resources` — 0 policies for any role other than `authenticated`
+  `room_presence_insert_member`) and the 4 storage policies on `storage.objects`
+  for `study-resources` (`0005`'s three plus
+  `study_resources_objects_delete_room_owner` from `0008`)
+  — 0 policies for any role other than `authenticated`
   across all of them. The presence policies are proven end to end by
   `tests/integration/presence-policies.test.ts` (member probe accepted,
   non-member / cross-room / anonymous / wrong-topic probes refused), and the

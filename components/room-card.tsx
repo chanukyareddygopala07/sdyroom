@@ -31,7 +31,7 @@ export function RoomCard({ room }: { room: RoomSummary }) {
       <div className="flex items-start justify-between gap-3">
         <h2 className="font-semibold leading-snug">{room.name}</h2>
         <Badge variant={room.status === "open" ? "default" : "secondary"}>
-          {room.status}
+          {room.status === "open" ? "Open" : "Closed"}
         </Badge>
       </div>
 
