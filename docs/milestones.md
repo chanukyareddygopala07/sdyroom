@@ -14,8 +14,9 @@ Working log: what has landed, what each milestone still owes.
 | H — browser end-to-end suite and realtime reliability | `9a98a4a`–`ebcc16e` | done |
 | Room chat — `0004_room_messages.sql`, messages API, realtime wiring, workspace mount | `e0e4eb2` | done |
 | Room presence — `0006_realtime_private_channels.sql`, private-channel policies, roster UI and `studying` flag | `91d2bed` (PR #6) | done |
-| I — private notes and PDF sharing: `0005_study_resources.sql`, private storage bucket, resource APIs, personal/room library | `feat/private-notes-library` | in progress |
-| Private room invitations + member roster — `0007_room_invitations.sql`, addressed invitations, invite inbox, owner invite panel, `room_roster` RPC | `feat/private-room-invitations` | in review (PR #7) |
+| I — private notes and PDF sharing: `0005_study_resources.sql`, private storage bucket, resource APIs, personal/room library | `4880163` (PR #5) | done |
+| Private room invitations + member roster — `0007_room_invitations.sql`, addressed invitations, invite inbox, owner invite panel, `room_roster` RPC | `b4e1f33` (PR #7) | done |
+| Room management — `0008_room_management.sql` (`update_room` / `delete_room` RPCs, room-owner storage sweep policy), owner-only settings page, `PATCH`/`DELETE /api/rooms/[id]`, type-the-name delete confirmation | `feat/room-management` | in review (PR #8) |
 
 ## Milestone D — task breakdown
 
