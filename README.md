@@ -85,7 +85,7 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**` — 215 tests covering auth at the API boundary, onboarding
+  over `tests/integration/**` — 240 tests covering auth at the API boundary, onboarding
   and response privacy, RLS/grant behaviour per role, `create_room` atomicity
   (including the revoked-grant rollback), joining and capacity races, the shared focus
   timer state machine, personal-goal privacy, append-only room chat, the whole
@@ -93,22 +93,28 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   leaving, signed URLs, impersonation of another student's folder, bucket privacy),
   live Realtime delivery of `focus_sessions` changes over a real WebSocket, the
   addressed-invitation lifecycle (create/accept/reject/revoke/expiry, the last-seat
-  accept race, roster denial for non-members, policy and grant freezes), and room
-  management (owner-gate parity, the capacity floor against a live join race,
-  direct-write denial with the in-transaction grant-widening control, and full
-  cascade + storage sweep on delete). It needs
+  accept race, roster denial for non-members, policy and grant freezes), room
+  management, and member moderation (report workflow with reporter privacy, mute
+  lifecycle with the direct-insert control, moderator appointment, one-way block
+  filtering, member removal, audit-row and grant probes, cross-room isolation) —
+  every suite shares a single control test that widens a grant and rolls it back.
+  It needs
   the local stack (`npx supabase start && npx supabase db reset`) and never uses a
   service-role key. `passWithNoTests` stays unset, so a missing suite still exits
   non-zero. See `tests/integration/README.md`.
-- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 29 Chromium tests
+- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 33 Chromium tests
   driving the real app (`next dev`) against the local stack: the full two-student
   workflow through the forms, private-room access, room chat, room presence across
   two browsers, the invitation lifecycle (invite by alias → inbox → accept, stranger
   negatives, reject/revoke/expiry, a full room), the upload → share →
   revoke → delete file lifecycle through the real upload form, room settings →
   close → name-typed delete across two browsers, expiry/failure/recovery
-  scenarios, and Realtime-vs-polling proven on an intercepted WebSocket (including
-  stale and duplicate frame replay). Test users are scoped to a per-run id and deleted
+  scenarios, Realtime-vs-polling proven on an intercepted WebSocket (including
+  stale and duplicate frame replay), and member safety (message report → owner's
+  moderation inbox → review → resolve with no reporter identity shown, one-way
+  block filtering, owner mute → disabled composer → removal to a 404, and the
+  documented refusal codes for anonymous, non-member and plain-member API
+  attempts). Test users are scoped to a per-run id and deleted
   by the global teardown (which also removes this run's storage objects before its
   `auth.users` rows). It needs the local stack plus `npx playwright install chromium`.
   See `tests/e2e/README.md`.
@@ -148,7 +154,7 @@ unique study alias once, then discover public rooms and create your own.
 | `POST /api/rooms` | signed in, alias chosen | `401` / `400 validation` / `403 onboarding_required` / `201` |
 | `POST /api/rooms/[id]/join` | signed in | `201 joined` / `200 already_member`; `404 not_found` for a missing or private room, `409 room_closed` / `room_full`, `400` for a non-UUID id or any field in the body |
 | `POST /api/rooms/[id]/leave` | signed in | `200 left`; `404 not_found`, `409 owner_cannot_leave` / `not_a_member`, `400` as above |
-| `/rooms/[id]` | signed in, member | The study workspace: member roster, shared focus timer, recent sessions, the caller's own goals, room chat and the files shared into the room; owners of private rooms also get the invite panel |
+| `/rooms/[id]` | signed in, member | The study workspace: member roster with the per-member action menu (report / block / mute / remove / appoint), shared focus timer, recent sessions, the caller's own goals, room chat and the files shared into the room; owners of private rooms also get the invite panel, and owners/moderators get the moderation inbox |
 | `GET /api/rooms/[id]/workspace` | signed in, member | `{ room, session, viewer_role, server_now_ms, member_count, history }`; `404 not_found` for a non-member *and* a missing room (indistinguishable) |
 | `POST /api/rooms/[id]/session/start` | room owner | `201 started` / `200 already_active` (one active session per room, races included); `403 not_owner`, `404 not_found`, `400 validation` for a duration outside 60–7200 s |
 | `POST /api/rooms/[id]/session/pause` / `resume` / `end` | room owner | `200 paused` / `resumed` / `completed`; `409 no_active_session` / `invalid_state`, `403 not_owner`, `400 invalid_request` for a body carrying fields |
@@ -159,9 +165,16 @@ unique study alias once, then discover public rooms and create your own.
 | `POST` / `GET /api/rooms/[id]/invitations` | room owner | Invite a student **by alias** (`{ invitee_alias, ttl_hours? }`, 1–168 h) → `201`; list the room's invitations → `200`. `403 not_owner`, `404 not_found` / `invitee_not_found`, `409 room_public` / `self_invite` / `already_member` / `already_invited` |
 | `DELETE /api/rooms/[id]/invitations/[invitationId]` | room owner | `200 { revoked: true }`; an already-resolved invitation (or a second revoke) is `404 not_found`, indistinguishable |
 | `GET /api/invitations` | signed in | The caller's invitation inbox (rows addressed to them), newest first |
-| `POST /api/invitations/[id]/accept` | the invitee | Empty body; `201 joined` / `200 already_member` (the invitation is consumed either way); `404` for anything not addressed to you, `409 used` / `rejected` / `revoked` / `room_full` / `room_closed`, `410 expired` |
+| `POST /api/invitations/[id]/accept` | the invitee | Empty body; `201 joined` / `200 already_member` (the invitation is consumed either way); `404` for anything not addressed to you, `409 used` / `rejected` / `revoked` / `room_full` / `room_closed` / `blocked` (you blocked the inviter), `410 expired` |
 | `POST /api/invitations/[id]/reject` | the invitee | Empty body → `200 { rejected: true }`; same `404` / `409` / `410` map as accept |
 | `GET /api/rooms/[id]/members` | signed in, member | `{ members: [{ alias, role, joined_at }], count }` — the roster; `404 not_found` for a non-member, and no user ids or emails in the payload |
+| `POST` / `GET /api/rooms/[id]/reports` | signed in, member / room moderator | File a report on a message, member or file (`201`, idempotent `200` on a duplicate open report; the reporter is pinned server-side and never returned) / the moderation inbox (`403 not_moderator`, no `reporter_id` column exists to leak) |
+| `PATCH /api/reports/[reportId]` | report's room owner/moderator | `200 { report }` through `pending → reviewing → resolved\|dismissed`; `404` for anyone else (no existence oracle), `409 invalid_transition`, one audit row per change |
+| `DELETE /api/rooms/[id]/members/[alias]` | owner or moderator | `200 { removed, member_count }`; `403 not_owner`… `cannot_remove_owner` / `cannot_remove_self` / `not_moderator`, `404` for a non-member caller — the target loses every room surface immediately |
+| `POST` / `DELETE /api/rooms/[id]/members/[alias]/mute` | owner or moderator | `201 { muted, muted_until, duration }` for `1h` / `24h` / `7d` / `200 { unmuted: true }`; `403 not_moderator` / `cannot_mute_self` / `cannot_mute_owner` / `cannot_mute_moderator`, `409 already_muted` / `not_muted`; enforced again in the `room_messages` insert policy |
+| `POST` / `DELETE /api/rooms/[id]/members/[alias]/moderator` | room owner | `200 { role, changed, granted }` — appoint or revoke a room moderator; `403 not_owner` / `cannot_moderate_owner`, `404 not_found` |
+| `POST` / `GET /api/blocks` | signed in | Block a student by alias (`201` / idempotent `200 { created: false }`, `409 self_block`) / the caller's own blocks only (`{ blocks, count }`) — nobody else can see whom you blocked |
+| `DELETE /api/blocks/[alias]` | signed in | `200 { removed }` (idempotent); unblocking restores the filtered chat and re-enables invitations |
 | `PATCH /api/rooms/[id]` | room owner | Partial edit of name / shared goal / exam track / subject / language / capacity / status → `200 { room }` (the stored row); `403 not_owner`, `404 not_found` for a non-member *and* a missing room, `409 capacity_below_membership`, `400 invalid_request` for an empty body / `validation` for a bad value or an unknown key such as `owner_id`, `401` |
 | `DELETE /api/rooms/[id]` | room owner | Sweeps `rooms/{id}/**` out of the bucket first, then cascades every dependent row → `200 { deleted: true }`; `403 not_owner`, `404 not_found` for a non-member, a missing room, or a repeat delete, `500 cleanup_failed` / `delete_failed` (room intact, retry converges) |
 | `/resources` | signed in | The personal library: upload, search and filter your own files, open them through a short-lived signed URL, delete them |
@@ -262,6 +275,15 @@ How the pieces fit together:
   with a private gate no client can execute. The roster reads through the
   membership-checked `room_roster` RPC — `room_members` visibility is unchanged —
   and annotates rows with live presence from the PR 06 channel.
+- **Member safety**: `lib/moderation/` reports, blocks, mutes, removals and
+  room-moderator appointment through alias-addressed SECURITY DEFINER RPCs
+  (`0009`) with no `INSERT`/`UPDATE` grant on the audit tables — the reporter is
+  pinned to `auth.uid()` inside the RPC and has no column grant, so no payload
+  can carry it; blocks are private to the blocker and filter that user's chat
+  through one clause on the `room_messages` SELECT policy (history and live
+  arrival alike); mutes are re-checked by the insert policy, so a direct
+  PostgREST write cannot bypass them. There is no global admin role: every
+  right is scoped to one room.
 - **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
   } }`, built by `lib/api/responses.ts`.
 

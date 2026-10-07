@@ -1,8 +1,31 @@
 # PR 09 — Moderation, reporting and blocking
 
-**Status:** specification only — no GitHub PR exists.
+**Status:** implemented on `feat/moderation-safety` — in review, no GitHub PR merged yet.
 **Owner:** Dev B (Cursor) · **Complexity:** Large · **Migration:** `0009_moderation.sql`
-**Depends on:** PR 07 (member roster — you can only moderate people you can see), chat (merged)
+**Depends on:** PR 07 (member roster — you can only moderate people you can see), PR 08 (merged), chat (merged)
+
+---
+
+### Reconciliation (decisions locked before implementation)
+
+| Decision | Chosen | Why |
+| --- | --- | --- |
+| Report statuses | `pending → reviewing → resolved \| dismissed` (terminal: resolved/dismissed) | The PR brief mandates a four-value controlled enum; no client-supplied values. |
+| Report reasons | `spam, harassment, abusive_content, inappropriate_content, impersonation, unsafe_resource, other` | Closed list; stored as CHECK-constrained text, validated by Zod at the edge. |
+| Wire identity | **Alias** for every target address (block, remove, mute, appoint, user-subject report); uuids stay server-side | PR 07 established "alias is the display and addressable identity throughout" and no payload has ever carried a user id; alias→uuid resolution happens only inside SECURITY DEFINER RPCs. |
+| Report creation | SECURITY DEFINER RPC `create_moderation_report`, **no direct `INSERT` grant** | A definer context is required to resolve a user-subject alias and to prove subject-in-room; also pins `reporter_id = auth.uid()` unforgeably (the `0005 owner_id` trick became unnecessary). |
+| Report status change | SECURITY DEFINER RPC `set_moderation_report_status`, **no `UPDATE` grant** | Keeps the "one audit row per mutation, same transaction" guarantee airtight. |
+| `moderation_actions` writes | **No `INSERT` grant at all** (stricter than this spec's original grant+policy design) | Prompt §4: ordinary users must never manufacture audit records; only authorized definer RPCs write them. |
+| `room_moderators` / `room_mutes` writes | RPC-only (no write grants) | Same audit guarantee; `SELECT` grants remain so members see moderator badges/mute state. |
+| `user_blocks` writes | RPC-only (`create_user_block` / `delete_user_block`), `SELECT` grant kept with `blocker_id = auth.uid()` policy | The route receives an alias and cannot resolve it (profiles are RLS own-only); the chat filter reads own blocks directly. |
+| Block → chat enforcement | One clause added to `room_messages` **SELECT** policy: `not exists (blocked by auth.uid())` | Realtime delivers `postgres_changes` subject to the subscriber's SELECT RLS (stated in `0004`), so history, direct reads **and** live arrival are all filtered by one server-side rule; the wire shape never changes. |
+| Block → invites | `accept_room_invitation` re-created in `0009` with a block check (PR 07 has merged, so the cross-PR touch lands here as this spec allows) | Stated choice: implemented, not deferred. `join_block_check` remains the documented follow-up (v1 block still does not stop joining). |
+| Message removal | **None.** Reports + member-level actions only; `room_messages` keeps no `UPDATE`/`DELETE` grant and gains no hidden columns | Prompt §9: do not add soft-hide complexity for a "report only" first release; "a message that was said stays said" stays trivially true. |
+| Report endpoint scope | Room-scoped `POST`/`GET /api/rooms/[id]/reports` + id-scoped `PATCH /api/reports/[reportId]` | Membership is provable from the path before any subject lookup; no room id in bodies to spoof. |
+| Member-removal endpoint | `DELETE /api/rooms/[id]/members/[alias]` (bodyless) | Prompt's endpoint shape adapted to REST + alias identity; optional free-text reason dropped (audit `reason` stays null — reports carry context). |
+| `PATCH /api/reports/[reportId]` unauthorized | **404**, not 403 (report id is opaque; 403 would confirm existence to non-moderators) | Satisfies the spec's own "no existence oracle" rule for id-scoped routes. |
+| Global `/moderation` page | **Not built.** The room-scoped moderation inbox (mounted in the room page) is the product contract | Reports are room-scoped and authorization is per-room; a global view would be dead weight. |
+| Block → presence | Not filtered in v1 (documented follow-up) | Presence is ephemeral broadcast; v1 block is a chat/invite concept. |
 
 ---
 
@@ -27,7 +50,9 @@ reported them.
 ### Scope
 
 - **Report** a user, a chat message, or a resource — with a reason from a closed
-  list plus optional free text (≤500 chars).
+  list (`spam | harassment | abusive_content | inappropriate_content |
+  impersonation | unsafe_resource | other`) plus optional free text (≤500
+  chars), status flowing `pending → reviewing → resolved | dismissed`.
 - **Block** a user, with deliberately narrow semantics (see "Blocking semantics"
   below — read it, it is a scope decision, not an omission).
 - **Remove a member from a room** (owner or moderator; never the owner, never
@@ -40,22 +65,36 @@ reported them.
 - **Moderator controls UI**: report button on messages/resources/member rows, a
   room-scoped moderation inbox (owner/moderator only), member actions menu.
 
-**Blocking semantics (decide up front, document in the PR):** SdyRoom has no DMs
-and `room_messages` is append-only. A "block" that only hides messages is easy to
-bypass client-side and does not stop someone following you between rooms. Therefore:
+**Blocking semantics (decided and shipped):** SdyRoom has no DMs and
+`room_messages` is append-only. A "block" that only hides messages client-side
+is easy to bypass and does not stop someone following you between rooms.
+Therefore v1 block =
 
-- **v1 block =** (a) the blocked user cannot be **invited** by the blocker
-  (checked in PR 07's accept RPC — cross-PR touch, see Dependencies), and (b) in
-  rooms the blocker is in, the blocked user's messages are **filtered out of the
-  history endpoint and dropped on arrival** for the blocker only.
+- **(a) the blocked user cannot be invited by the blocker** — enforced inside
+  `accept_room_invitation`, re-created in `0009` (the cross-PR touch this spec
+  allowed; PR 07 has merged). Accepting such an invitation answers `blocked`
+  with a neutral message: the blocker is never notified, and the blocked user
+  learns only that this invitation is no longer usable.
+- **(b) in rooms the blocker is in, the blocked user's messages are invisible to
+  the blocker** — old history and live arrival alike, enforced by one clause on
+  the `room_messages` SELECT policy (`not exists (select 1 from user_blocks
+  where blocker_id = auth.uid() and blocked_id = room_messages.user_id)`).
+  RLS applies at realtime delivery, so the server filters without the client
+  ever seeing the message.
+
+Answers to the four product questions, explicitly:
+
+| Question | v1 answer |
+| --- | --- |
+| Can the blocker still see the blocked user's **old** messages? | No — filtered server-side at read time. Nothing is deleted; the rows are simply not visible to the blocker. |
+| Can the blocked user **send** new messages? | Yes — they can still post; the blocker just never receives them. Stopping sends would need a membership-level check and is a follow-up. |
+| Is **presence** filtered? | No — presence is unchanged in v1 (documented follow-up). |
+| Can they **remain in the same room**? | Yes — blocking never changes membership and never notifies. |
+
 - **v1 block does NOT** prevent the blocked user from joining a public room the
   blocker is in. That requires a membership-level check in `join_room` and is
   listed as an explicit follow-up (`join_block_check`), because it changes a
   documented RPC.
-
-If (b) is judged too weak to ship, the honest alternative is to cut blocking from
-this PR and ship report/remove/mute/moderator/audit first. Say which you chose in
-the PR description; do not ship a checkbox that does nothing.
 
 ### Out of scope
 
@@ -71,12 +110,15 @@ the PR description; do not ship a checkbox that does nothing.
   table; do not build delivery here.
 - Legal/compliance workflows (appeals, data subject requests).
 
-**Message removal decision (state it in the PR):** a moderator "removing" a
-message must not violate "a message that was said stays said". Recommended:
-**soft-hide via `room_messages.hidden_at` + `hidden_by`** requires an `UPDATE`
-grant on those two columns only — a narrow, defensible widening — **or** keep
-messages truly immutable and give moderators only member-level actions
-(remove/mute). Choose one; the migration must match.
+**Message removal decision (made):** **no soft-hide.** Chat stays fully
+append-only — `room_messages` keeps its `SELECT`/`INSERT` grants untouched and
+gains no `hidden_at`/`hidden_by` columns. Moderators act at the member level
+(remove / mute) and mark reports `resolved`/`dismissed`; the message a student
+wrote remains exactly as written for everyone. Rationale: prompt §9 ships
+"report only" for the first release rather than layering a soft-delete model
+onto an append-only table, and every hidden-message feature afterwards would
+inherit this migration's grant surface. The one change to an existing policy is
+the **mute clause on the insert policy** (below) — functionally a narrowing.
 
 ---
 
@@ -87,7 +129,7 @@ messages truly immutable and give moderators only member-level actions
 | `components/chat-panel.tsx` | Overflow/report affordance on each message (own messages excluded), owner/moderator-only "Remove" if that option is chosen. Keep the composer untouched. |
 | `components/resources/resource-library.tsx` | Report action on room-scoped rows only (reporting your own personal file is meaningless). |
 | `components/room-roster.tsx` (PR 07) | Per-member action menu for owner/moderator: **Remove from room**, **Mute 1h/24h/7d**, **Appoint moderator** / **Revoke moderator**. Non-privileged members see read-only rows. |
-| `components/moderation-inbox.tsx` (new) | Room-scoped report list: subject type, reason, room, created time, status; action = remove/mute/mark resolved. Owner/moderator only. |
+| `components/moderation-inbox.tsx` (new) | Room-scoped report list: subject type, reason, created time, status, resolver; actions = **Start review / Resolve / Dismiss** (status transitions only — remove and mute live in the roster menu). Owner/moderator only. |
 | `components/report-dialog.tsx` (new) | Reason radio group (closed list) + optional detail, `role="alert"` errors, submit → success state. |
 | `app/(app)/rooms/[id]/page.tsx` | Mount the inbox behind an owner/moderator-only disclosure. |
 
@@ -100,71 +142,119 @@ not hand-roll).
 
 | Route | Behavior |
 | --- | --- |
-| `POST /api/rooms/[id]/reports` | Any member. Body `{ subject_type: 'user'\|'message'\|'resource', subject_id: uuid, reason: enum, detail?: ≤500 }`. Validates the subject is actually in that room. → `201 { report: { id, status } }`. Duplicate open report by the same reporter for the same subject → `200` idempotent. |
-| `GET /api/rooms/[id]/reports` | Owner/moderator only → `{ reports: [...] }`. |
-| `PATCH /api/reports/[reportId]` | Owner/moderator → `{ status }` (`open → resolved`). |
-| `POST /api/rooms/[id]/members/[userId]/remove` | Owner/moderator, never self, never the owner. Body `{ reason? }` → `200 { removed: true, member_count }`. |
-| `POST /api/rooms/[id]/members/[userId]/mute` | Owner/moderator. Body `{ duration: '1h'\|'24h'\|'7d' }` → `201 { muted_until }`; `DELETE` on the same path lifts. |
-| `POST /api/rooms/[id]/members/[userId]/moderator` / `DELETE` | Owner only → `200 { role }`. |
-| `POST /api/blocks` / `DELETE /api/blocks` | Body `{ user_id }` → `201`/`200`; `409 self_block`. |
-| `GET /api/blocks` | Caller's own blocks only → `{ user_ids: [...] }` (aliases preferred: `{ blocks: [{ alias }] }` — decide and be consistent). |
+| `POST /api/rooms/[id]/reports` | Any member. Body: strict discriminated union — `{ subject_type: 'user', subject_alias }` or `{ subject_type: 'message' \| 'resource', subject_id: uuid }`, plus `reason` (enum) and optional `detail` (≤500). Resolves + validates the subject **inside** `create_moderation_report` (membership first, then subject). → `201 { report: { id, status, created_at } }`. Duplicate open (pending/reviewing) report by the same reporter for the same subject → `200 { report: { id, status }, duplicate: true }` (idempotent, not 409). `self_report` → `409`. |
+| `GET /api/rooms/[id]/reports` | Owner/moderator only (`403 not_moderator` for members; `404` for non-members) → `{ reports: [...], count }` — explicit column list, **no `reporter_id` in the payload or the column grant**. |
+| `PATCH /api/reports/[reportId]` | Owner/moderator of the report's room. Body `{ status: 'reviewing' \| 'resolved' \| 'dismissed' }`. Unauthorized or missing → **`404 not_found`** (no existence oracle); illegal transition → `409 invalid_transition`. → `200 { report: { id, status } }`. Writes one `moderation_actions` row via `set_moderation_report_status`. |
+| `DELETE /api/rooms/[id]/members/[alias]` | Owner/moderator, never the owner, never self. Bodyless → `200 { removed: true, member_count }`. |
+| `POST /api/rooms/[id]/members/[alias]/mute` | Owner/moderator. Body `{ duration: '1h' \| '24h' \| '7d' }` → `201 { muted: true, muted_until, duration }`. |
+| `DELETE /api/rooms/[id]/members/[alias]/mute` | Owner/moderator lifts → `200 { unmuted: true }`; no active mute → `409 not_muted`. |
+| `POST /api/rooms/[id]/members/[alias]/moderator` / `DELETE` | Owner only, bodyless → `200 { role: 'moderator' \| 'student', changed: boolean, granted: boolean }` (`changed: false` is the idempotent repeat). |
+| `POST /api/blocks` | Body `{ alias }` → `201 { block: { alias, created_at }, created: true }`; repeat → `200 { block: { alias, created_at }, created: false }`; `409 self_block`. |
+| `GET /api/blocks` | Caller's own blocks only → `{ blocks: [{ alias, created_at }], count }` (alias shape, consistent with the rest of the product). |
+| `DELETE /api/blocks/[alias]` | Caller's own block only, idempotent → `200 { removed: boolean }`. |
 
 Existing pattern: identity from session, `requireRoomMembership` for room scope,
-strict bodies, one error envelope, `404` indistinguishability for room access.
+strict bodies, one error envelope, `404` indistinguishability for room access,
+**alias as the only wire identity** (uuids never leave the server for users).
 
 Privesc checks happen **before** any subject lookup, so a non-moderator cannot
-use the endpoint as an existence oracle.
+use the endpoint as an existence oracle; room-scoped routes answer `404` before
+`403` for callers who are not members.
 
 ### Database work
 
-`supabase/migrations/0009_moderation.sql`:
+`supabase/migrations/0009_moderation.sql` (reconciled):
 
 - `moderation_reports(id, room_id, subject_type, subject_id, subject_user_id,
   reporter_id, reason, detail, status, created_at, resolved_at, resolved_by)`
-  — index on `(room_id, status, created_at desc)`, and a partial unique
-  `(reporter_id, subject_type, subject_id) where status = 'open'`.
+  — CHECKs on `subject_type` (`user|message|resource`), `reason` (closed enum),
+  `status` (`pending|reviewing|resolved|dismissed`), `char_length(detail) <=
+  500`; index on `(room_id, status, created_at desc)`; partial unique
+  `(reporter_id, subject_type, subject_id) where status in ('pending',
+  'reviewing')`.
 - `moderation_actions(id, room_id, actor_id, action, subject_user_id,
-  subject_ref, reason, created_at)` — append-only: **no UPDATE/DELETE grant**
-  (the audit trail must be uneditable by the app).
+  subject_ref, reason, created_at)` — CHECK on `action`
+  (`member_removed|mute_applied|mute_lifted|moderator_appointed|moderator_revoked|report_reviewed|report_resolved|report_dismissed`);
+  append-only: **no `INSERT`, `UPDATE` or `DELETE` grant for anyone** — rows
+  exist only because SECURITY DEFINER RPCs write them in the same transaction
+  as the mutation they describe.
 - `room_moderators(room_id, user_id, granted_by, created_at)` — PK
-  `(room_id, user_id)`, `ON DELETE CASCADE`, owner-only insert policy.
+  `(room_id, user_id)`, `ON DELETE CASCADE`, `SELECT` grant with a
+  member-of-room policy (so roster badges are honest), **no write grants**.
 - `user_blocks(blocker_id, blocked_id, created_at)` — PK both columns,
-  CHECK `blocker_id <> blocked_id`, cascade on auth user delete.
+  CHECK `blocker_id <> blocked_id`, cascade on auth user delete; `SELECT` grant
+  with `blocker_id = auth.uid()` policy only (the chat filter reads it);
+  writes go through `create_user_block` / `delete_user_block`.
 - `room_mutes(room_id, user_id, muted_until, muted_by, created_at)` — partial
-  unique one active mute per `(room_id, user_id) where muted_until > now()`.
-- Grants (revoke-first, column-scoped):
-  - `moderation_reports`: `SELECT` (reporter sees own reports; moderators see
-    room's — policy-based, not grant-based), `INSERT` **excluding**
-    `reporter_id` (defaults to `auth.uid()`, same trick as `owner_id` in
-    `0005`), `UPDATE (status, resolved_at, resolved_by)` for moderators only.
-  - `moderation_actions`: `SELECT` (owner/moderator of that room) + `INSERT`
-    (excluding `actor_id`? No — keep `actor_id` granted for INSERT but pinned by
-    RLS `with check actor_id = auth.uid()`; the *reporter* field is the one that
-    must be hidden, the *actor* is the moderator's own identity).
-  - `room_moderators`: `SELECT`/`INSERT`/`DELETE` with owner policies.
-  - `user_blocks`: `SELECT`/`INSERT`/`DELETE` with `blocker_id = auth.uid()`
-    policies only.
-  - `room_mutes`: `SELECT`/`INSERT`/`DELETE` with actor-is-owner-or-moderator
-    policies.
+  unique one active mute per `(room_id, user_id) where muted_until > now()`;
+  `SELECT` grant with member-of-room policy; writes RPC-only.
+- `moderation_reports` grants: **`SELECT` only, and the column list excludes
+  `reporter_id`** — no role can read it through PostgREST; the reporter's own
+  rows are visible via a `reporter_id = auth.uid()` policy (policies may
+  reference columns without granting them — the `study_resources.owner_id`
+  precedent). Everything else (`INSERT`/`UPDATE`) is RPC-only.
+- **`room_messages` SELECT policy gains a block clause** (the only existing
+  policy changed, functionally narrowed):
+
+  ```sql
+  and not exists (
+    select 1 from public.user_blocks b
+    where b.blocker_id = auth.uid()
+      and b.blocked_id = room_messages.user_id
+  )
+  ```
+
+- **`room_messages` INSERT policy gains a mute clause** (the other narrowed
+  clause): `and not exists (select 1 from public.room_mutes mu where
+  mu.room_id = room_messages.room_id and mu.user_id = auth.uid() and
+  mu.muted_until > now())`. Sender pinning (`user_id = auth.uid()`) and the
+  membership conjunct stay byte-identical — `room-messages.test.ts` keeps
+  passing and gains mute coverage.
 - RPCs (SECURITY DEFINER, `search_path = ''`, execute revoked from
   `public`/`anon`):
-  - `remove_room_member(p_room_id uuid, p_user_id uuid)` — actor must be room
-    owner or in `room_moderators`; cannot remove the owner; cannot remove self;
-    writes a `moderation_actions` row; returns member count.
-  - `mute_room_member(p_room_id, p_user_id, p_interval interval)`,
-    `unmute_room_member(...)`.
-  - `set_room_moderator(p_room_id, p_user_id, p_on boolean)` — owner only.
-  - `room_can_post(p_room_id uuid) returns boolean` (or a `with check` on the
-    `room_messages` insert policy) so a mute is enforced at the database, not
-    only in the route.
-- **`room_messages` insert policy gains a mute clause**:
-  `and not exists (select 1 from room_mutes where room_id = … and user_id =
-  auth.uid() and muted_until > now())`. This is the one place an existing policy
-  is widened (functionally narrowed) — call it out in the PR description and
-  update `room-messages.test.ts`.
-- **If soft message hiding is chosen:** `grant update (hidden_at, hidden_by)`,
-  a policy `using` owner-or-moderator-of-the-room, and a trigger rejecting
-  `hidden_at` once set (un-hiding is allowed; arbitrary edits are not).
+  - `create_moderation_report(p_room_id uuid, p_subject_type text,
+    p_subject_ref text, p_reason text, p_detail text)` — membership first
+    (`42501` → route maps to `404`), then subject: user → resolve alias,
+    must be a member of the room and not the caller; message/resource → must
+    belong to the room and not be the caller's own. Returns
+    `{code: created|duplicate|self_report|not_found|invalid_subject, id?,
+    status?}`.
+  - `set_moderation_report_status(p_report_id uuid, p_status text)` — actor
+    must be owner/moderator of the report's room (`not_found` otherwise — no
+    oracle), legal transitions only (`pending→reviewing|resolved|dismissed`,
+    `reviewing→resolved|dismissed`), one audit row.
+  - `remove_room_member(p_room_id uuid, p_member_alias text)` — actor owner or
+    in `room_moderators` (`not_moderator`); cannot remove the owner
+    (`cannot_remove_owner`); cannot remove self (`cannot_remove_self`);
+    target must be a member (`not_found`); deletes the membership row, writes
+    one audit row, returns `member_count`.
+  - `mute_room_member(p_room_id uuid, p_member_alias text, p_interval
+    interval)` — actor gate first (`not_moderator` for plain members), then
+    **self first** (`cannot_mute_self` — checked before the owner/moderator
+    rules so an owner muting themselves gets the honest refusal rather than
+    `cannot_mute_owner`), then the owner (`cannot_mute_owner`) and a
+    moderator (`cannot_mute_moderator`); `already_muted` if an active mute
+    exists; one audit row; returns `muted_until`.
+  - `unmute_room_member(p_room_id uuid, p_member_alias text)` — deletes the
+    active mute (`not_muted` if none), one audit row.
+  - `set_room_moderator(p_room_id uuid, p_member_alias text, p_on boolean)` —
+    **owner only** (`not_owner`); target must be a member, never the owner
+    (`cannot_moderate_owner`); no-op returns `changed: false` without an audit
+    row; otherwise one audit row. Self-appointment is structurally impossible
+    for non-owners (they are not allowed to call it at all), and an owner
+    appointing themselves is refused because they are the owner.
+  - `create_user_block(p_alias text)` / `delete_user_block(p_alias text)` /
+    `list_my_blocks()` — blocker always `auth.uid()`; `self_block` refused;
+    create is idempotent; delete is idempotent; only the caller's rows are
+    touched.
+  - `room_moderation_info(p_room_id uuid)` — member-gated; returns
+    `{viewer_can_moderate, moderator_aliases, muted_aliases,
+    viewer_is_muted, muted_until}` so the page can gate the inbox, annotate
+    the roster and disable the composer (aliases only — no ids on the wire).
+  - `accept_room_invitation` re-created with one added check after the expiry
+    gate: if `exists (select 1 from user_blocks where blocker_id =
+    v_inv.inviter_id and blocked_id = v_user_id)` return
+    `{code: 'blocked'}` (invitation left pending; neutral message).
 
 ### Storage work
 
@@ -194,17 +284,22 @@ A user must **not** be able to:
 2. Appoint themselves moderator, or appoint a moderator in someone else's room.
 3. Remove the room owner, remove themselves as an ownership bypass, or remove a
    member of a different room.
-4. Learn who reported them: `reporter_id` has no `SELECT` grant for anyone
-   except the reporter's own rows; report listings returned to moderators must
-   **omit `reporter_id` entirely** (moderators see subject, reason, detail,
-   time). Verify with a response-shape assertion.
-5. Read another user's blocks, or block themselves/UUIDs that are not users.
-6. Mute the owner or a moderator (policy/`with check`).
-7. Edit or delete a `moderation_actions` row (no grant).
+4. Learn who reported them: `reporter_id` has **no `SELECT` grant for any
+   role** (not even the reporter's — nobody reads it back through PostgREST);
+   report listings returned to moderators must **omit `reporter_id` entirely**
+   (moderators see subject, reason, detail, time). Verify with a
+   response-shape assertion plus a column-grant probe.
+5. Read another user's blocks (only your own rows are visible), block
+   themselves (`self_block`), or address a target that is not an existing alias.
+6. Mute the owner, a moderator, or themselves (refused inside the RPC).
+7. Edit or delete a `moderation_actions` row, or insert one directly (no grants
+   exist at all — RPCs only).
 8. Evade a mute by inserting into `room_messages` directly through PostgREST
    (RLS `with check` enforces it).
 9. Forge a report about a subject in a room they are not in (validate
    membership first, then subject).
+10. Send as a blocked user to the blocker, or receive the blocker's messages
+    differently — the filter is the SELECT policy, one server-side rule.
 
 Positive guarantees:
 
@@ -218,27 +313,29 @@ Positive guarantees:
 Shared envelope. Selected shapes:
 
 ```jsonc
-// POST /api/rooms/[id]/reports   201
-{ "report": { "id": "…", "status": "open", "subject_type": "message",
-              "reason": "harassment", "created_at": "…" } }
+// POST /api/rooms/[id]/reports   201 (200 + duplicate:true on idempotent repeat)
+{ "report": { "id": "…", "status": "pending", "created_at": "…" } }
 // GET /api/rooms/[id]/reports    200  (moderator view: NO reporter_id)
 { "reports": [ { "id", "subject_type", "subject_id", "subject_alias",
-                 "reason", "detail", "status", "created_at" } ] }
-// POST /api/rooms/[id]/members/[userId]/remove   200
+                 "reason", "detail", "status", "created_at",
+                 "resolved_at", "resolved_by" } ], "count": 1 }
+// DELETE /api/rooms/[id]/members/[alias]   200
 { "removed": true, "member_count": 3 }
-// POST /api/rooms/[id]/members/[userId]/mute     201
-{ "muted_until": "…", "member_count": 3 }
+// POST /api/rooms/[id]/members/[alias]/mute   201
+{ "muted": true, "muted_until": "…", "duration": "1h" }
+// GET /api/blocks   200
+{ "blocks": [ { "alias": "…", "created_at": "…" } ], "count": 1 }
 ```
 
 | Error | Code | When |
 | --- | --- | --- |
-| 400 | `validation` / `invalid_request` | bad body, unknown field |
+| 400 | `validation` / `invalid_json` / `invalid_request` | bad body, unknown field, empty body where one is required |
 | 401 | `unauthenticated` | no session |
-| 403 | `not_owner` / `not_moderator` / `cannot_moderate_owner` | privesc |
-| 404 | `not_found` | room not visible, or subject not in room |
-| 409 | `duplicate_report` (idempotent `200` instead — pick one), `already_muted`, `self_block`, `cannot_remove_owner` | state conflicts |
+| 403 | `not_moderator` / `not_owner` / `cannot_remove_owner` / `cannot_remove_self` / `cannot_mute_owner` / `cannot_mute_moderator` / `cannot_mute_self` / `cannot_moderate_owner` | privesc or forbidden target (room is known to the caller at this point, so 403 leaks nothing) |
+| 404 | `not_found` | room not visible, member/subject not in room, report not visible to a non-moderator |
+| 409 | `self_report` / `self_block` / `already_muted` / `not_muted` / `invalid_transition` | state conflicts (duplicate reports answer idempotent `200`, not 409) |
 | 429 | `rate_limited` | PR 10 provides the mechanism; leave the mapping documented, do not implement |
-| 500 | `report_failed` / `moderation_failed` | hygiene |
+| 500 | `report_failed` / `moderation_failed` / `blocks_failed` | hygiene |
 
 ### Tests
 
@@ -253,95 +350,137 @@ Shared envelope. Selected shapes:
   (owner / moderator / student), remove confirmation, mute duration menu,
   moderation inbox rendering.
 
-**Integration (`tests/integration/room-moderation.test.ts`)**
+**Integration (`tests/integration/room-moderation.test.ts`)** — the full
+prompt matrix, at minimum:
 
-- Report flow: member reports a message → row exists, reporter defaults to
-  `auth.uid()`; forging `reporter_id` → permission denied / policy denial.
-- Reporter privacy: moderator listing contains no `reporter_id` column at all;
-  the reported user's own reads never surface it.
-- Unauthorized moderator request → `403` with zero rows touched.
+- Anonymous cannot create a report or a block (401).
+- Member reports a message → row exists, `reporter_id = auth.uid()`; forging a
+  reporter in a body is structurally impossible (no such field accepted);
+  a direct `insert` of a report (if attempted) cannot pin another reporter.
+- Reporter privacy: moderator listing contains no `reporter_id` column at all
+  (response-shape assertion + column-grant probe); the reported user's own
+  reads never surface it.
+- A non-member/non-moderator's room-scoped requests → `404`/`403` with zero
+  rows touched; `PATCH /reports/[id]` by a non-moderator → `404` (no oracle).
 - Remove: owner removes student → membership gone, `member_count` updated,
-  `moderation_actions` row present; removing the owner → refused; removing
-  across rooms → refused.
+  exactly one `moderation_actions` row; removing the owner → refused; removing
+  self → refused; removing across rooms → refused; non-owner/non-moderator →
+  `403`.
+- Removed member loses: roster/members (404), message send (404 — the
+  membership gate, plus direct PostgREST insert denial), history read,
+  private-room resources, presence channel authorization (realtime.messages
+  insert denied).
 - Mute: muted member's `POST /messages` → denied **and** a direct PostgREST
-  insert → `42501`; unmute restores; mute cannot target the owner.
+  insert → `42501`; unmute restores; mute cannot target the owner/moderator/self.
 - Moderator appointment: owner appoints → appointee can act; non-owner cannot;
-  revoked moderator loses access immediately.
-- Audit: `moderation_actions` has no UPDATE/DELETE grant (probe), and one row
-  per action with `actor_id = auth.uid()`.
-- Blocks: `user_blocks` visible only to the blocker; self-block refused; the
-  history endpoint filters a blocked user's messages for the blocker.
+  self-assignment impossible; revoked moderator loses access immediately.
+- Audit: `moderation_actions` has no INSERT/UPDATE/DELETE grant (frozen probes),
+  exactly one row per action with `actor_id = auth.uid()`.
+- Blocks: idempotent repeat; private to the blocker (another user's read sees
+  nothing); `self_block` refused; unblock removes only the caller's row; the
+  history endpoint **and** a direct `select` of messages filter the blocked
+  user's messages for the blocker only; blocked user's invite acceptance →
+  `blocked`.
 - Cross-room isolation: actions in room A never appear in room B's inbox.
+- Existing suites remain green: chat, resources, invitations, focus/goals RLS.
 
-**E2E (`tests/e2e/moderation.spec.ts`)**
+**Control-violation test (prompt §15):** inside a rolled-back transaction,
+widen `moderation_actions` (grant `insert` to `authenticated` **and** add a
+permissive policy) and show a direct insert then succeeds — proving the test
+suite would catch such a weakening — then roll back and re-assert the secure
+state (insert denied, zero grants). Nothing weakened is left in the branch.
 
-- Owner removes a member; that member's next navigation to the room 404s and
-  their chat composer is gone.
-- Owner mutes; muted member cannot send (server message surfaced in the UI);
-  owner lifts the mute; member can send again.
-- Member files a report from a message; owner sees it in the inbox and resolves
-  it; the reported member never sees any report UI reference.
-- Non-owner sees none of the moderator controls.
+**E2E (`tests/e2e/moderation.spec.ts`)** — four scenarios, no mocked successes:
+
+- **A — Report:** a member reports a message from the chat affordance, sees
+  the confirmation; the owner opens the inbox, resolves it; the reported side
+  sees no reporter reference anywhere.
+- **B — Block:** one member blocks another from the roster; the blocker no
+  longer receives that user's messages (history filtered, new sends invisible
+  to the blocker); unblock restores the view.
+- **C — Owner moderation:** owner removes a member from the roster menu; that
+  member's next navigation to the room 404s, their composer is gone, and their
+  direct API attempts fail; owner mutes another member → send fails with a
+  surfaced server message → lift → send works.
+- **D — Unauthorized moderation:** a normal member attempts owner/moderator
+  actions directly against the API (`remove`, `mute`, `moderator`, `PATCH`
+  report) — every request rejected; no moderator controls render in their UI.
 
 ### Dependencies
 
-- PR 07 (roster) must merge first.
-- **Small cross-PR touch:** the block-check on invite acceptance belongs in
-  PR 07's `accept_room_invite`. Implement it as "if PR 07 has merged, add the
-  check in this PR's migration as an `update` to that function" — or land the
-  check as a follow-up if the sequencing does not allow editing another PR's
-  RPC. State the choice.
-- Chat (merged).
+- PR 07 (roster) must merge first — **merged** (`b4e1f33`).
+- **Small cross-PR touch — choice made:** PR 07 has merged, so `0009`
+  re-creates `accept_room_invitation` with the block check inside it (one
+  `create or replace function`; the original in `0007` stays untouched on
+  disk). Tested in this PR. The `join_block_check` membership follow-up stays
+  open, as scoped above.
+- Chat (merged). PR 08 (merged).
 
 ### Files / modules likely affected
 
 ```
 supabase/migrations/0009_moderation.sql                  (new)
-app/api/rooms/[id]/reports/route.ts                      (new)
-app/api/reports/[reportId]/route.ts                      (new)
-app/api/rooms/[id]/members/[userId]/{remove,mute,moderator}/route.ts  (new)
-app/api/blocks/route.ts                                  (new)
-app/api/rooms/[id]/messages/route.ts                     (block filtering on read)
-lib/moderation/{queries,types,errors}.ts                 (new)
+app/api/rooms/[id]/reports/route.ts                      (new: POST, GET)
+app/api/reports/[reportId]/route.ts                      (new: PATCH)
+app/api/rooms/[id]/members/[alias]/route.ts              (new: DELETE)
+app/api/rooms/[id]/members/[alias]/mute/route.ts         (new: POST, DELETE)
+app/api/rooms/[id]/members/[alias]/moderator/route.ts    (new: POST, DELETE)
+app/api/blocks/route.ts                                  (new: POST, GET)
+app/api/blocks/[alias]/route.ts                          (new: DELETE)
+app/api/rooms/[id]/messages/route.ts                     (no route change —
+                                                          block filter is RLS;
+                                                          mute surfaces a 403)
+lib/moderation/{queries,errors}.ts                       (new)
 lib/validation/moderation.ts                             (new)
-components/report-dialog.tsx, moderation-inbox.tsx       (new)
-components/chat-panel.tsx, room-roster.tsx,
-components/resources/resource-library.tsx                (report/reporter affordances)
-app/(app)/rooms/[id]/page.tsx                            (inbox mount)
-tests/integration/room-moderation.test.ts                (new)
-tests/integration/room-messages.test.ts                  (mute clause update)
-tests/e2e/moderation.spec.ts                             (new)
-docs/SECURITY.md, docs/API_CONTRACTS.md, docs/local-supabase.md, docs/milestones.md
+lib/chat/queries.ts                                      (42501 → `muted` 403
+                                                          vs lost-seat 404)
+lib/invitations/queries.ts                               (`blocked` code on
+                                                          invitation accept)
+components/report-dialog.tsx, moderation-inbox.tsx,
+components/ui/{dialog,alert-dialog,radio-group}.tsx      (new, shadcn-style)
+components/chat-panel.tsx, room-roster.tsx, room-chat.tsx,
+components/resources/resource-library.tsx                (report affordances,
+                                                          mute state)
+app/(app)/rooms/[id]/page.tsx                            (inbox + gating mount)
+tests/setup.ts                                           (jsdom ResizeObserver
+                                                          stub for Radix)
+tests/unit/…, tests/integration/room-moderation.test.ts,
+tests/integration/room-messages.test.ts (regression watch — unchanged),
+tests/e2e/moderation.spec.ts
+docs/SECURITY.md, docs/API_CONTRACTS.md, docs/ARCHITECTURE.md,
+docs/local-supabase.md, docs/milestones.md, docs/PR_ROADMAP.md, README.md
 ```
 
 ### Acceptance criteria
 
-- [ ] Only the owner and appointed moderators can act; every attempt otherwise
+- [x] Only the owner and appointed moderators can act; every attempt otherwise
       fails with `403` and touches zero rows.
-- [ ] The reported user can never learn the reporter's identity through any
+- [x] The reported user can never learn the reporter's identity through any
       endpoint or payload (asserted as a response-shape test).
-- [ ] Removal and mute take effect immediately for the target user, including
+- [x] Removal and mute take effect immediately for the target user, including
       for direct PostgREST writes.
-- [ ] Every action produces exactly one immutable `moderation_actions` row.
-- [ ] Blocks are private to the blocker and filter that user's messages.
-- [ ] Chat remains append-only for normal members; the chosen message-removal
+- [x] Every action produces exactly one immutable `moderation_actions` row.
+- [x] Blocks are private to the blocker and filter that user's messages.
+- [x] Chat remains append-only for normal members; the chosen message-removal
       semantics (soft-hide vs none) match the migration.
-- [ ] All three suites + build green locally and in CI.
+- [ ] All three suites + build green locally and in CI. *(locally green: lint,
+      types, 710 unit, build, fresh `db reset` + `db lint`, 240 integration,
+      33 e2e; CI runs on the PR)*
 
 ### Definition of Done
 
-1. `npx supabase db reset` from scratch; every grant/policy probe passes,
+1. [x] `npx supabase db reset` from scratch; every grant/policy probe passes,
    including the negative ones (no `UPDATE` on `moderation_actions`, no
    `reporter_id` in moderator payloads).
-2. The "Blocking semantics" and "Message removal" decisions are stated in the PR
+2. [x] The "Blocking semantics" and "Message removal" decisions are stated in the PR
    description with their rationale — not left implicit.
-3. CI green on all three jobs.
-4. `docs/SECURITY.md` gains a moderation section (reporter privacy is the key
+3. [ ] CI green on all three jobs.
+4. [x] `docs/SECURITY.md` gains a moderation section (reporter privacy is the key
    row); `docs/local-supabase.md` tables/grants/RLS updated;
    `docs/milestones.md` "No presence, typing indicators, chat moderation…"
    bullet narrowed to what is still true.
-5. Cross-PR block-invite interaction resolved and tested.
-6. Reviewed by Dev A.
+5. [x] Cross-PR block-invite interaction resolved and tested.
+6. [ ] Reviewed by Dev A.
 
 ### Owner
 

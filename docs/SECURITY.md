@@ -39,6 +39,11 @@ file carries the model behind them.
 | Forwarded invitation | The invitee copies their inbox row (or its id) to someone else | There is nothing to forward: invitations are addressed to `invitee_id`, and acceptance binds to `auth.uid()` — a third party acting on the id gets `404`. (Superseded the spec's bearer-link accepted risk: see `docs/prs/PR-07-private-invitations.md`.) |
 | Roster probing | A non-member reading `GET /api/rooms/[id]/members` or calling `room_roster` directly | The route proves membership first and the RPC re-proves it inside its own transaction; both a missing room and a forbidden one are the same `404`. The response carries alias/role/joined_at only — no user ids, no emails |
 | Invite spam by a room owner | An owner mass-inviting aliases | Not rate-limited (repo-wide gap, PR 10); bounded today by owner-only creation, the one-pending-per-(room, invitee) partial unique index, and 1–168 h TTL bounds |
+| Forged reporter identity | A report body carrying `reporter_id` or `actor_id` | No such field exists in the schema (unknown keys are `400 validation`); `create_moderation_report` pins `reporter_id = auth.uid()` inside the definer, and the column has **no `SELECT` grant**, so no read path can return it |
+| Audit-trail forgery | Hand-written `INSERT`/`UPDATE` on `moderation_reports`, `moderation_actions` or `room_moderators` | No write grants at all — `42501` on privilege before any policy runs; only the definer RPCs write, one audit row per action, with `actor_id = auth.uid()` |
+| Muted member bypassing the mute | `POST /rest/v1/room_messages` straight at PostgREST | The INSERT policy's `with check` requires no active mute → `42501`; the API route maps the same refusal to `403 muted`, and the composer is disabled up front |
+| Block discovered by the blocked user | "Did they block me?" probing | `user_blocks` is `SELECT` own-rows only, no endpoint tells the other side, and the invitation refusal (`409 blocked`) is reachable only by the invitee — i.e. only the person who blocked ever sees it |
+| Moderator over-reach | A moderator acting outside their room, or a member claiming moderator | Every RPC re-derives `auth.uid()` and re-proves owner-or-`room_moderators` **within that `room_id`**; there is no global admin role, cross-room calls answer `404`/`403`, and a plain member's attempt is `403 not_moderator` with zero rows touched |
 
 ## Room presence: what it discloses
 
@@ -102,6 +107,48 @@ a write the schema never granted, so they state the rule explicitly:
   metadata left to authorize their cleanup. A sweep failure returns
   `500 cleanup_failed` with the room fully intact.
 
+## Moderation: what keeps a reporter private
+
+Member safety (`0009`) is the first surface where one member acts on another,
+so each rule is stated rather than implied:
+
+- **`reporter_id` cannot leak because it cannot even be read.** The column has
+  no `SELECT` grant for `authenticated` or `anon`, the moderator listing is an
+  explicit column projection inside `room_report_list`, and the integration
+  suite asserts both the response shape and the grant probe. The reporter is
+  pinned to `auth.uid()` inside `create_moderation_report` — no body field
+  exists to forge — and no endpoint returns the identity.
+- **Audit rows are definer-only.** `moderation_reports`, `moderation_actions`
+  and `room_moderators` carry no `INSERT`/`UPDATE`/`DELETE` grant, so ordinary
+  users cannot manufacture reports, verdicts or appointments even through
+  hand-written PostgREST. Exactly one `moderation_actions` row is written per
+  privileged mutation, in the same transaction as it, with
+  `actor_id = auth.uid()`; the frozen integration probes pin the empty grant
+  surface.
+- **No global admin role.** Every right is `room_id`-scoped and re-proven from
+  `auth.uid()` inside the RPC (room owner or a `room_moderators` row). Nothing
+  in the schema grants power over more than one room, and cross-room calls
+  answer the same `404`/`403` as a stranger's.
+- **Mute is two layers deep.** The RPC refuses self, owner and moderator
+  targets (`cannot_mute_self` first), and the `room_messages` INSERT policy
+  re-checks the active mute — a direct PostgREST insert dies with `42501`,
+  surfaced to the composer as `403 muted`. Unmute restores both at once.
+- **Blocks are invisible to the blocked.** `user_blocks` is `SELECT` own-rows
+  only, the API returns the caller's aliases and timestamps alone, and the
+  filter is one clause on the `room_messages` SELECT policy — so history,
+  direct reads *and* live `postgres_changes` delivery are all filtered by the
+  same server-side rule. The blocked user keeps seeing the blocker's messages
+  and is never told.
+- **`PATCH /api/reports/[id]` answers `404`, not `403`.** The report id is
+  opaque and the room never enters the path, so a non-moderator cannot use the
+  endpoint as an existence oracle; room-scoped routes answer `404` before `403`
+  for callers who are not members.
+- **Removal is membership, never message history.** Removing a member deletes
+  their `room_members` row; `room_messages` keeps no `UPDATE`/`DELETE` grant
+  and no hidden columns — "a message that was said stays said" — while RLS
+  cuts the removed member off from roster, history, resources and presence
+  immediately.
+
 ## Study resources: where the rules live
 
 | Layer | File | Rule |
@@ -126,9 +173,9 @@ Two details worth restating because they are easy to lose:
 
 | Suite | Command | What it pins down |
 | --- | --- | --- |
-| Unit | `npm test` | Validators, path building and ownership parsing, query scoping, every route's status/code matrix including the error branches, upload form and library UI behaviour, the invitation validators and all six invitation/roster routes, the room `PATCH`/`DELETE` routes and their owner-gate mapping, the settings and delete-danger components, and the presence store |
-| Integration | `npm run test:integration` | Against the real local stack with real auth users: `tests/integration/study-resources.test.ts` (22) — privacy of columns and rows, anonymous listing, signed-URL reachability with its 300 s TTL and refusal without a signature, cross-user open/delete refusal, member read, non-member 404, **revocation on leaving**, `owner_id` rejection, impersonation of another student's folder (row *and* object), impersonation of the signed path, magic-byte mismatch, bucket privacy, `owner_id` grants, and the key-layout CHECK; `tests/integration/room-invitations.test.ts` (37) — invitation RLS and grant freezes, non-owner create refusal, alias addressing, every transition (accept/reject/revoke/expiry), the accept race against the last seat, roster denial for non-members, and policy/grant checksums; `tests/integration/room-management.test.ts` (22) — owner-gate parity for `PATCH`/`DELETE`, identity-field refusals, the capacity floor incl. a live join race, the open/close lifecycle, direct-write denial for authenticated and `anon`, the grant/function/storage-policy freezes, the in-transaction control that widens the `UPDATE` grant and still gets zero rows, and full cascade + storage-object removal on delete |
-| Browser | `npm run test:e2e` | `tests/e2e/resources.spec.ts` (5) — upload through the real form, private library, room sharing and delete in Chromium; `tests/e2e/invitations.spec.ts` (4) — the invitation lifecycle in two real browsers (invite → inbox → accept, negatives for a stranger, rejection/revocation/expiry, and a full room) plus live presence annotation on the roster; `tests/e2e/room-management.spec.ts` (3) — the owner editing settings a member can see, a non-owner bounced off the settings URL, closing a room so a new student cannot join, and a name-typed delete that 404s the member's stale workspace |
+| Unit | `npm test` | Validators, path building and ownership parsing, query scoping, every route's status/code matrix including the error branches, upload form and library UI behaviour, the invitation validators and all six invitation/roster routes, the room `PATCH`/`DELETE` routes and their owner-gate mapping, the moderation routes (report/PATCH/blocks status matrices, no reporter field accepted) and the report dialog, roster action menu, moderation inbox and muted composer, the settings and delete-danger components, and the presence store |
+| Integration | `npm run test:integration` | Against the real local stack with real auth users: `tests/integration/study-resources.test.ts` (22) — privacy of columns and rows, anonymous listing, signed-URL reachability with its 300 s TTL and refusal without a signature, cross-user open/delete refusal, member read, non-member 404, **revocation on leaving**, `owner_id` rejection, impersonation of another student's folder (row *and* object), impersonation of the signed path, magic-byte mismatch, bucket privacy, `owner_id` grants, and the key-layout CHECK; `tests/integration/room-invitations.test.ts` (37) — invitation RLS and grant freezes, non-owner create refusal, alias addressing, every transition (accept/reject/revoke/expiry), the accept race against the last seat, roster denial for non-members, and policy/grant checksums; `tests/integration/room-management.test.ts` (22) — owner-gate parity for `PATCH`/`DELETE`, identity-field refusals, the capacity floor incl. a live join race, the open/close lifecycle, direct-write denial for authenticated and `anon`, the grant/function/storage-policy freezes, the in-transaction control that widens the `UPDATE` grant and still gets zero rows, and full cascade + storage-object removal on delete; `tests/integration/room-moderation.test.ts` (25) — anonymous refusals, strict report bodies, the reporter-identity response-shape and column-grant probes, self/foreign-subject refusals, the workflow with its audit rows, the mute lifecycle with a direct-insert denial, moderator appointment, blocks with one-way chat filtering and the blocked-invite round trip, member removal, cross-room isolation, audit/grant freezes, and a rolled-back control that widens a grant and still gets zero rows |
+| Browser | `npm run test:e2e` | `tests/e2e/resources.spec.ts` (5) — upload through the real form, private library, room sharing and delete in Chromium; `tests/e2e/invitations.spec.ts` (4) — the invitation lifecycle in two real browsers (invite → inbox → accept, negatives for a stranger, rejection/revocation/expiry, and a full room) plus live presence annotation on the roster; `tests/e2e/room-management.spec.ts` (3) — the owner editing settings a member can see, a non-owner bounced off the settings URL, closing a room so a new student cannot join, and a name-typed delete that 404s the member's stale workspace; `tests/e2e/moderation.spec.ts` (4) — a message report reaching the owner's inbox with no reporter identity shown, one-way block filtering that leaves no trace for the blocked, an owner mute disabling the composer before a confirmed removal, and the documented refusal codes for anonymous, non-member and plain-member direct API attempts |
 
 CI runs all three (`.github/workflows/ci.yml`) with `permissions: contents: read`
 and no repository secrets.
@@ -139,6 +186,9 @@ These are known limitations, not oversights to be discovered later:
 
 - **No rate limiting.** No rate limiter exists anywhere in this application yet;
   adding one only for uploads would be inconsistent with the rest of the app.
+  The moderation routes (report filing, mute/unmute, block/unblock) are named
+  in PR 10's remit for exactly that reason — they are documented, not
+  throttled, today.
 - **No malware scanning.** Only signature and encoding validation runs. The
   migration header says this in so many words: format validation is not
   scanning, and nothing in this repository claims otherwise.

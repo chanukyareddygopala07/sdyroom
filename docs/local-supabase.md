@@ -81,6 +81,18 @@ five `SECURITY DEFINER` RPCs (`create_room_invitation`, `accept_room_invitation`
 `CREATE OR REPLACE` that lifts the 0002 seat logic into an internal
 `join_room_core` while keeping `join_room`'s signature, behaviour and grants
 identical.
+`supabase/migrations/0009_moderation.sql` adds member safety: five tables
+(`moderation_reports`, `moderation_actions`, `room_moderators`, `room_mutes`,
+`user_blocks`), thirteen new functions (reports and verdicts, the moderator
+inbox, removal, mute/unmute, moderator appointment, blocks,
+`room_moderation_info`, two small helpers) plus `accept_room_invitation`
+re-created with a block check, two
+narrow `SELECT` grants, four policies (two new own-row policies plus
+`room_messages`' two policies re-created with exactly one added conjunct each),
+and **no** table grant at all on reports, actions or moderators. Every
+privileged mutation writes one `moderation_actions` audit row in the same
+transaction, so the audit trail exists only as a side effect of the action it
+describes.
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
@@ -92,6 +104,11 @@ identical.
 | `room_messages` | `id`, `room_id` → `rooms`, `user_id` → `auth.users`, `alias`, `body`, `seq`, `created_at` | Append-only chat history: `SELECT`+`INSERT` only, no `UPDATE`/`DELETE` grant and no such policy, so a message that was said stays said. `alias` is the sender's study alias copied at send time (rendering never joins `profiles`); `seq` is an identity column giving a total order for `before=` cursor pagination that `created_at` alone cannot. CHECKs: body trimmed, 1–2000 chars; alias ≤ 32. |
 | `study_resources` | `id`, `owner_id` → `auth.users`, `room_id` → `rooms`, `storage_path`, `title`, `original_filename`, `content_type`, `size_bytes`, `subject`, `chapter`, `created_at`, `updated_at` | `room_id IS NULL` = personal (uploader only), otherwise shared with that room's current members. `owner_id` defaults to `auth.uid()` and is granted for **neither** `INSERT` nor `SELECT`, so a browser cannot choose an owner and the column never leaves the database. `storage_path` is server-built and pinned by a regex CHECK to `personal/{owner}/{id}{ext}` or `rooms/{room}/{owner}/{id}{ext}`, with a second CHECK tying the two representations of scope together (`(room_id is null) = (storage_path like 'personal/%')`). `content_type` ∈ the five sniffed types, `size_bytes` 1–20 MiB. Unique on `storage_path`; `updated_at` owned by `study_resources_touch`. |
 | `room_invitations` | `id`, `room_id` → `rooms`, `inviter_id` → `auth.users`, `invitee_id` → `auth.users`, `inviter_alias`, `invitee_alias`, `room_name`, `status`, `expires_at`, `created_at`, `resolved_at` | Addressed invitation: the owner names a student by alias; only that student may read or act on it. `status` ∈ `pending`/`accepted`/`rejected`/`revoked` with `pending ⇔ resolved_at is null`; **no stored `expired` state** — `expires_at > created_at` is checked at read time. Partial unique index `room_invitations_one_pending (room_id, invitee_id) where status = 'pending'` (at most one pending invite per room+invitee, absorbs the create race → `23505` → `already_invited`); inbox and owner-list indexes on `invitee_id` / `inviter_id`. Alias and room-name copies are 1–32/1–100 char CHECKs. `SELECT` only for clients — all four writes are `SECURITY DEFINER` RPCs. |
+| `moderation_reports` | `id`, `room_id` → `rooms`, `subject_type`, `subject_id`, `subject_user_id`, `reporter_id`, `reason`, `detail`, `status`, `created_at`, `resolved_at`, `resolved_by` | A report about one subject in one room (`0009`). `subject_type` ∈ `user`/`message`/`resource` with a deliberately FK-less `subject_id` — the RPC proves the subject existed at report time, and the report stays readable after the subject disappears. `reason` is a closed 7-value enum (`spam`, `harassment`, `abusive_content`, `inappropriate_content`, `impersonation`, `unsafe_resource`, `other`); `detail` ≤ 500 chars. `status` ∈ `pending`/`reviewing`/`resolved`/`dismissed`; partial unique `moderation_reports_active_subject_idx (reporter_id, subject_type, subject_id) where status in ('pending','reviewing')` collapses an open duplicate to an idempotent `200`. **`reporter_id` has no `SELECT` grant for any role**, and the table has no grant at all: reads and writes are RPC-only. |
+| `moderation_actions` | `id`, `room_id` → `rooms`, `actor_id`, `action`, `subject_user_id`, `subject_ref`, `reason`, `created_at` | The audit trail (`0009`): one row per privileged mutation, written inside the same transaction as it. `action` ∈ `member_removed`/`mute_applied`/`mute_lifted`/`moderator_appointed`/`moderator_revoked`/`report_reviewed`/`report_resolved`/`report_dismissed`. **Zero grants for every role** — structurally unforgeable; nothing ever returns the table to a client either. |
+| `room_moderators` | `room_id` → `rooms`, `user_id` → `auth.users`, `granted_by`, `created_at`, PK `(room_id, user_id)` | Owner-appointed, room-scoped moderator grants — the *only* moderator concept in the schema (no global role exists). Zero grants; read inside the definer functions, cascade away with the room or the account. |
+| `room_mutes` | `room_id`, `user_id`, `muted_until`, `muted_by`, `created_at`, unique `(room_id, user_id)` | One live mute per member per room (`0009`). Uniqueness is **total**, not partial: a `where muted_until > now()` predicate would not be immutable, so the RPC sweeps expired rows before inserting instead. `SELECT` for `authenticated` (the `room_messages` INSERT policy subquery needs it) plus an own-row policy; writes are RPC-only. |
+| `user_blocks` | `blocker_id` → `auth.users`, `blocked_id` → `auth.users`, `created_at`, PK `(blocker_id, blocked_id)`, CHECK `blocker_id <> blocked_id` | One-directional blocks (`0009`): visible to the blocker only, neither side notified. `SELECT` for `authenticated` (the `room_messages` SELECT policy filters on it) plus an own-row policy; writes are RPC-only. |
 
 No sample rooms and no fabricated auth users are inserted by SQL: `supabase/seed.sql`
 is intentionally empty, and local test data is made only through the Auth API and the
@@ -109,11 +126,11 @@ signed-URL endpoint).
 Grants are explicit and column-aware (`auto_expose_new_tables = false` in
 `config.toml`, so new tables receive no default API-role grants):
 
-| Grantee | `profiles` | `rooms` | `room_members` | `focus_sessions` | `study_goals` | `room_messages` | `study_resources` | `room_invitations` |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `anon` | none | none | none | none | none | none | none | none |
-| `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` | `SELECT` | `SELECT`, `INSERT`, `DELETE`, `UPDATE (title, target_seconds, target_count, status)` | `SELECT`, `INSERT` | `SELECT` / `INSERT` / `UPDATE (title, subject, chapter)` / `DELETE`, each on an explicit column list — **never `owner_id`** | `SELECT` (whole table — the policy reads `inviter_id`/`invitee_id`, and Postgres checks privileges on every column a policy touches); **no write verb at all** |
-| `service_role` | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges |
+| Grantee | `profiles` | `rooms` | `room_members` | `focus_sessions` | `study_goals` | `room_messages` | `study_resources` | `room_invitations` | `moderation_reports` | `moderation_actions` | `room_moderators` | `room_mutes` | `user_blocks` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `anon` | none | none | none | none | none | none | none | none | none | none | none | none | none |
+| `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` | `SELECT` | `SELECT`, `INSERT`, `DELETE`, `UPDATE (title, target_seconds, target_count, status)` | `SELECT`, `INSERT` | `SELECT` / `INSERT` / `UPDATE (title, subject, chapter)` / `DELETE`, each on an explicit column list — **never `owner_id`** | `SELECT` (whole table — the policy reads `inviter_id`/`invitee_id`, and Postgres checks privileges on every column a policy touches); **no write verb at all** | **none** | **none** | **none** | `SELECT` | `SELECT` |
+| `service_role` | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges |
 
 **No `UPDATE` or `DELETE` grant on `rooms` / `room_members` — and since `0008`
 that is a deliberate design, not an undeveloped flow.** Room edits and deletion go
@@ -153,6 +170,21 @@ alias columns instead. With no write grant, create/accept/reject/revoke cannot b
 reached through PostgREST at all (`42501` on privilege grounds), exactly like the
 focus RPCs.
 
+`0009` splits the same deny-by-default shape in two. `moderation_reports`,
+`moderation_actions` and `room_moderators` get **no grant at all** for `anon`,
+`authenticated` or `service_role` (revoked from those three and from `public`
+first), so every read and write travels through a definer function:
+`reporter_id` has no `SELECT` grant for any role and is structurally
+unreachable, and an audit row cannot be manufactured through PostgREST even
+before the zero-policy layer is consulted. `room_mutes` and `user_blocks` are
+the exception that proves the rule: they receive a bare table-level `SELECT`
+because policy subqueries run with the **invoker's** privileges — the
+`room_messages` INSERT policy reads `room_mutes`, its SELECT policy reads
+`user_blocks`, and a policy referencing an ungranted table fails with
+"permission denied" instead of filtering. Each pairs that grant with an
+own-row policy, so the direct read still returns nothing but the caller's
+rows.
+
 ## Row Level Security
 
 | Table | Policy | Effect |
@@ -166,12 +198,15 @@ focus RPCs.
 | `room_members` | `room_members_insert_owner_self` | only the room owner, about themselves, as `owner` |
 | `focus_sessions` | `focus_sessions_select_member` | members of the room only; there is no insert/update/delete policy, so RLS denies them even if a grant ever appeared |
 | `study_goals` | `study_goals_select_own` / `insert_own` / `update_own` / `delete_own` | `user_id = auth.uid()` only; the insert policy also requires membership of the goal's room, so a goal cannot be attached to a room the writer has not joined |
-| `room_messages` | `room_messages_select_member` | members of the message's room only |
-| `room_messages` | `room_messages_insert_own_member` | `user_id = auth.uid()` **and** membership — a forged sender is impossible even for a direct PostgREST insert |
+| `room_messages` | `room_messages_select_member` (`0009` re-created) | members of the message's room **and not blocked by the viewer** — one conjunct covers history reads, direct selects and realtime delivery (sender pinning and membership are byte-identical to `0004`) |
+| `room_messages` | `room_messages_insert_own_member` (`0009` re-created) | `user_id = auth.uid()` **and** membership **and no active mute** — a direct PostgREST insert while muted answers `42501` exactly like any other policy denial |
 | `study_resources` | `study_resources_select_own_or_member` | own rows, plus rows whose `room_id` has a `room_members` row for `auth.uid()` **right now** — leaving a room revokes read access on the next query, with no file moved or deleted |
 | `study_resources` | `study_resources_insert_own_member` | `owner_id = auth.uid()`, membership of the target room, and a `storage_path` under the caller's own folder in the matching prefix |
 | `study_resources` | `study_resources_update_own` / `delete_own` | `owner_id = auth.uid()` — a room member can read a shared file and still cannot edit or remove it |
 | `room_invitations` | `room_invitations_select_addressed` (`0007`) | `invitee_id = auth.uid() or inviter_id = auth.uid()` — a student reads only invitations addressed to them, an owner only the ones they created, and a stranger reads nothing. Every *write* is an RPC, so there is no insert/update/delete policy to widen: the table simply has no write grant |
+| `moderation_reports`, `moderation_actions`, `room_moderators` | none (`0009`) | deny-by-default twice: zero policies on top of zero grants. Every read and write is a definer RPC, so there is deliberately nothing for a policy to permit |
+| `room_mutes` | `room_mutes_select_own` (`0009`) | `user_id = auth.uid()` only — the table-level `SELECT` exists for the chat policy's subquery, and this policy keeps the direct read scoped to the caller's own mute rows |
+| `user_blocks` | `user_blocks_select_own` (`0009`) | `blocker_id = auth.uid()` only — the same reasoning as `room_mutes`; the blocked side never sees the row that names them |
 | `realtime.messages` | `room_presence_select_member` / `room_presence_insert_member` (`0006`) | the whole of the private-channel gate for `room-presence-{uuid}` topics: `authenticated` only, extension must be `broadcast`/`presence`, and the uuid in the topic must match a current `room_members` row for `auth.uid()` — so a non-member (or an anonymous client) cannot join, cannot confirm a private room exists, and cannot read another room's roster. Realtime's authorization probes run as the caller inside a transaction that rolls back, so nothing is ever written |
 
 Storage objects have their own four policies (next section); they are not listed
@@ -375,32 +410,72 @@ delete_room(p_room_id uuid) returns jsonb
   only DDL privilege change is the fourth storage policy,
   `study_resources_objects_delete_room_owner`, documented in the section above.
 
+## Moderation functions (`0009_moderation.sql`)
+
+Thirteen new functions plus `accept_room_invitation` re-created — all
+`SECURITY DEFINER`, `set search_path = ''`, schema-qualified, `auth.uid()`
+null-checked first, execute revoked from `public`/`anon` and granted only to
+`authenticated`. Alias is the only identity in any parameter or response; user
+uuids are resolved inside the definer only, which is why `reporter_id` can have
+no grant and still be written.
+
+| Function | Behaviour |
+| --- | --- |
+| `moderation_actor_role(p_room_id) → text` | The one authorization helper: `owner` / `moderator` / `member` / `none`, from `rooms.owner_id` and `room_moderators` before falling back to `room_members`. Returns a role, never a row. |
+| `moderation_resolve_alias(p_alias) → uuid` | Alias → uuid inside the definer (null for blank or unknown). The uuid is never returned to a payload; `profiles` stays RLS own-only for direct reads. |
+| `create_moderation_report(p_room_id, p_subject_type, p_subject_id, p_reason, p_detail) → jsonb` | Membership first, subject second, reporter pinned to `auth.uid()` — no parameter can carry an identity. Re-checks the enum, the 500-char detail and `self_report` in SQL as well as in Zod, proves the subject exists in that room (`invalid_subject`), and collapses an open duplicate to `200 { report, duplicate: true }` via `moderation_reports_active_subject_idx`. Success: `201 { report: { id, status, created_at } }`. |
+| `set_moderation_report_status(p_report_id, p_status) → jsonb` | Moderator-only transition; anyone who is not the owner/moderator of the report's room gets the **same `not_found` as a missing id** — an opaque report id must not become an existence oracle. Allowed: `pending → reviewing\|resolved\|dismissed`, `reviewing → resolved\|dismissed` (`invalid_transition` otherwise). Writes exactly one `moderation_actions` row (`report_reviewed` / `report_resolved` / `report_dismissed`) in the same transaction. |
+| `room_report_list(p_room_id, p_limit = 50) → jsonb` | The inbox: membership re-checked, returns `{ reports, count }` with subject aliases resolved inside the server. The projection **never selects `reporter_id`**, so it cannot leak by accident. |
+| `remove_room_member(p_room_id, p_member_alias) → jsonb` | Owner or moderator removes a member under the room-row lock (`join_room_core` serialises against a concurrent join). Check order: actor gate (`not_found` for a non-member caller — indistinguishable from a missing room — then `not_moderator` for a plain member), target resolution (`not_found` for an unknown alias or a non-member target), then `cannot_remove_owner` and `cannot_remove_self`. Deletes the membership — messages stay (no `UPDATE`/`DELETE` grant on `room_messages`) — and sweeps the target's `room_moderators` row and active `room_mutes` row with it, because both mean nothing without membership. Returns `{ removed, member_count }` + audit row `member_removed`. |
+| `mute_room_member(p_room_id, p_member_alias, p_interval) → jsonb` | Owner or moderator. Check order: actor gate (`not_found` for non-members, `not_moderator` for plain members), then **self first** (`cannot_mute_self`), then owner (`cannot_mute_owner`), then moderator (`cannot_mute_moderator`); the interval must be one of the three product durations (`1h`/`24h`/`7d` — re-checked in SQL, not just in Zod) and an overlapping active mute answers `already_muted`. Sweeps expired rows before inserting (total uniqueness on `(room_id, user_id)`). `201 { muted, muted_until }` + audit row `mute_applied`. |
+| `unmute_room_member(p_room_id, p_member_alias) → jsonb` | Same gates minus the target rules; `not_muted` when no active row. `{ unmuted: true }` + audit row `mute_lifted`. |
+| `set_room_moderator(p_room_id, p_member_alias, p_on) → jsonb` | **Owner only** — a non-member gets `not_found`, a member who is not the owner gets `not_owner` before any target logic runs, so a moderator may not mint moderators. Target rules: unknown alias or non-member target → `not_found`, the owner as target → `cannot_moderate_owner`. Idempotent — an unchanged appointment returns `200 { role, changed: false }`, a real flip `200 { role, changed: true, granted }`. Audit rows: `moderator_appointed` / `moderator_revoked`. |
+| `create_user_block(p_alias) → jsonb` | Any signed-in user blocks any other (room membership irrelevant). `self_block` / `validation` refusals; an existing row answers `200 { block, created: false }` (idempotent), a new one `201 { block, created: true }`. The blocked side is never notified. |
+| `delete_user_block(p_alias) → jsonb` | Removes the caller's own row; `{ removed }`. Nothing else in the system rewrites it — leaving a room does not unblock. |
+| `list_my_blocks() → table(alias, created_at)` | The caller's rows only (`where blocker_id = auth.uid()`), newest first — no uuids, no one else's view. |
+| `room_moderation_info(p_room_id) → jsonb` | One definer call for the page: membership required (`42501` → route `404`), returns `{ can_moderate, moderator_aliases, muted_aliases, viewer_is_muted, muted_until }`. Moderator/mute alias lists are visible only to owners and moderators; a plain member gets `muted_aliases: []` but their own `viewer_is_muted` flag (so the composer can explain itself before the first failed send). |
+| `accept_room_invitation(p_invitation_id)` (`0007` re-created) | Unchanged from `0007` except one added gate after expiry: if the invitee has blocked the inviter, the invitation fails `blocked` — it stays pending, the blocker is never notified, and only the blocker (who must call accept themselves) ever sees the code. Grants are preserved by `CREATE OR REPLACE`; the `0007` file on disk is untouched. |
+
+Every one of the mutating functions writes its `moderation_actions` row in the
+same transaction as the action, so an action without an audit row (or vice
+versa) cannot be committed.
+
 ## Verification performed
 
 All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001 … 0008
-npx supabase migration list --local # 0001 … 0008 present locally
+npx supabase db reset               # exit 0: applied 0001 … 0009
+npx supabase migration list --local # 0001 … 0009 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
 
-- RLS enabled on all eight tables: `profiles`, `rooms`, `room_members`,
+- RLS enabled on all thirteen tables: `profiles`, `rooms`, `room_members`,
   `focus_sessions`, `study_goals`, `room_messages`, `study_resources`,
-  `room_invitations` (`relrowsecurity = t`).
-- 21 table policies on `public.*`, every one `to authenticated` (the 21st is
-  `room_invitations_select_addressed` from `0007`); plus the two
-  `0006` policies on `realtime.messages` (`room_presence_select_member` /
-  `room_presence_insert_member`) and the 4 storage policies on `storage.objects`
-  for `study-resources` (`0005`'s three plus
+  `room_invitations`, `moderation_reports`, `moderation_actions`,
+  `room_moderators`, `room_mutes`, `user_blocks` (`relrowsecurity = t`).
+- 23 table policies on `public.*`, every one `to authenticated` (the 21st was
+  `room_invitations_select_addressed` from `0007`; `0009` added
+  `room_mutes_select_own` and `user_blocks_select_own` and re-created
+  `room_messages`' two policies in place, so the count moves 21 → 23); plus
+  the two `0006` policies on `realtime.messages` (`room_presence_select_member`
+  / `room_presence_insert_member`) and the 4 storage policies on
+  `storage.objects` for `study-resources` (`0005`'s three plus
   `study_resources_objects_delete_room_owner` from `0008`)
   — 0 policies for any role other than `authenticated`
   across all of them. The presence policies are proven end to end by
   `tests/integration/presence-policies.test.ts` (member probe accepted,
-  non-member / cross-room / anonymous / wrong-topic probes refused), and the
-  invitation policies by `tests/integration/room-invitations.test.ts`.
+  non-member / cross-room / anonymous / wrong-topic probes refused), the
+  invitation policies by `tests/integration/room-invitations.test.ts`, and
+  the moderation policies and grant freezes by
+  `tests/integration/room-moderation.test.ts`.
+- The five `0009` tables: zero table grants on `moderation_reports`,
+  `moderation_actions` and `room_moderators` for every API role (verified:
+  the only grants in `information_schema.role_table_grants` belong to
+  `postgres`), `SELECT` only for `authenticated` on `room_mutes` and
+  `user_blocks`, and no non-`authenticated` grant anywhere.
 - FKs: `rooms.owner_id`/`room_members.user_id`/`profiles.id` → `auth.users`
   `ON DELETE CASCADE`; `room_members.room_id` → `rooms` `ON DELETE CASCADE`.
 - Composite PK `(room_id, user_id)`, unique `profiles_alias_lower_key` on `lower(alias)`.
@@ -498,6 +573,25 @@ end to end by `tests/integration/room-invitations.test.ts`:
 | Roster | members read alias/role/joined_at for the whole room (no user ids); non-member → `404`; `room_members` grants and policies byte-identical to before |
 | `join_room` unchanged | signature, ACL and behaviour identical after the `CREATE OR REPLACE`; private non-member still `room_not_found` |
 
+Member safety (`0009_moderation.sql`), covered end to end by
+`tests/integration/room-moderation.test.ts` (25 tests):
+
+| Requirement | Result |
+| --- | --- |
+| Anonymous refusal | report and block endpoints → `401 unauthenticated` with no row written anywhere |
+| Strict bodies | unknown keys (incl. a smuggled `reporter_id`) and out-of-enum reasons → `400 validation`; the RPC re-checks both, so only the route can be bypassed, never the rule |
+| Reporter privacy | response contains `id`/`status`/`created_at` only; `room_report_list` never returns `reporter_id`; `has_column_privilege(authenticated, 'moderation_reports', 'reporter_id', 'SELECT')` = `f`, and a direct PostgREST read of the table fails on the missing grant |
+| Report addressing | self-report → `409 self_report`; a subject outside the caller's room → `404`/`invalid_subject` with no write; open duplicate → idempotent `200 { report, duplicate: true }` |
+| Workflow | `pending → reviewing → resolved`, each transition returning `200` and leaving exactly one `moderation_actions` row stamped with the actor; invalid jumps → `409 invalid_transition`; non-member → `404`, plain member → `403 not_moderator` on the inbox list |
+| Mute lifecycle | `201 { muted, muted_until }` + one `mute_applied` audit row; the muted target's API send → `403 muted` and their direct `room_messages` insert is refused by the `with check` policy (`42501`, zero rows written) while their reads keep working; repeat mute → `409 already_muted`; a second member's `room_mutes` read returns only their own row; unmute restores sending (`201`/`{ unmuted: true }`), repeat → `409 not_muted`; owner / moderator / self targets → `403 cannot_mute_owner` / `cannot_mute_moderator` / `cannot_mute_self` with zero rows touched |
+| Moderator appointment | owner-only: a moderator's `POST` → `403 not_owner`, non-member → `404`; granting works immediately for the new moderator's inbox and roster actions; the owner as target → `403 cannot_moderate_owner`; revoke restores plain-member refusals in the same request cycle |
+| Blocks | `201 { block, created: true }` then `200 created: false` on repeat; self → `409 self_block`; unknown alias → `404`; each caller's `GET` shows only their own rows; the blocker stops seeing the blocked user's messages — pre-block history via the API, the same rows via a direct PostgREST select, and new sends — while the blocked user and every other member still see them, and the blocked user keeps receiving the blocker's messages |
+| Blocked invitations | invite → `409 blocked` on accept while the block stands, `201 joined` after unblock; the invitation stays pending in between |
+| Member removal | moderator removes a member → `{ removed, member_count }` + one audit row; plain member → `403 not_moderator`, non-member → `404`, owner target → `403 cannot_remove_owner`, self → `403 cannot_remove_self`; the removed member loses roster, history reads, chat sends and presence (channel join refused), and their moderator grant and mute are swept with the membership |
+| Cross-room isolation | reports, audit rows and moderator grants of room A never appear in room B's inbox; the same caller acting across rooms gets per-room results only |
+| Grant / audit freezes | `moderation_reports`/`moderation_actions`/`room_moderators`: zero grants for `anon`/`authenticated`/`service_role` and zero policies; `room_mutes`/`user_blocks`: `SELECT` only with own-row policies; the eight-value action enum pinned by checksum; exactly one audit row per action |
+| Control violation (rolled back) | widening a grant and dropping the policy **inside a transaction** lets a direct insert through, proving both layers are load-bearing — the transaction rolls back and the posture is re-verified `f` immediately after |
+
 ## Notes and risks
 
 - Disk is the binding constraint: the local images need several GB. If Docker or the
@@ -506,8 +600,9 @@ end to end by `tests/integration/room-invitations.test.ts`:
 - `auto_expose_new_tables = false` means future tables are invisible to the API until
   explicitly granted. That is intentional.
 - `service_role` has no data privileges; no server-side code uses it.
-- Room `status` and `capacity` are now enforced by the join flow, but there is still no
-  UI to close or edit a room: `rooms` has no `UPDATE`/`DELETE` grant.
+- Room `status` and `capacity` are enforced by the join flow and edited only
+  through the owner's settings page — `rooms` still has no `UPDATE`/`DELETE`
+  grant, so both flow through the `update_room` / `delete_room` definer RPCs.
 - Authenticated API behaviour is covered by `tests/integration/` (run it with
   `npm run test:integration`); the schema itself is proven by `db lint` and `db reset`.
 - The `study-resources` bucket is created by `0005`, so a reset provisions it too;
