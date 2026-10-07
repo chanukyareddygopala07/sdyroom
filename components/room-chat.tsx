@@ -1,6 +1,7 @@
 "use client";
 
 import { ChatPanel } from "@/components/chat-panel";
+import { clearRoomPresence, publishRoomPresence } from "@/lib/chat/presence-store";
 import { toChatMessageView } from "@/lib/chat/queries";
 import {
   presenceChannelTopic,
@@ -346,10 +347,11 @@ export function RoomChat({
     const sync = () => {
       if (disposed || !channel) return;
       const state: PresenceState = channel.presenceState();
-      setRoster({
-        roomId,
-        participants: toParticipants(state, aliasRef.current),
-      });
+      const participants = toParticipants(state, aliasRef.current);
+      setRoster({ roomId, participants });
+      // Same observation, second reader: the member roster annotates its
+      // rows from this store instead of opening its own channel.
+      publishRoomPresence(roomId, participants);
     };
 
     const connect = async () => {
@@ -406,6 +408,10 @@ export function RoomChat({
     return () => {
       disposed = true;
       if (heartbeat !== null) clearInterval(heartbeat);
+      // The channel that published the list is going away, so the list is no
+      // longer observed: readers must fall back to "not observed" rather than
+      // keeping a ghost roster of everyone who was here.
+      clearRoomPresence(roomId);
       const open = channel;
       presenceChannelRef.current = null;
       if (open) {

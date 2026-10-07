@@ -33,3 +33,23 @@ export async function ResourceNavLink() {
     </Link>
   );
 }
+
+/**
+ * The invitation inbox is session-gated the same way: a signed-out visitor
+ * is not pointed at a route that would bounce them to login, and the session
+ * read is why callers mount this inside its own `<Suspense>`.
+ */
+export async function InvitationsNavLink() {
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getClaims();
+
+  if (!data?.claims) {
+    return null;
+  }
+
+  return (
+    <Link href="/invitations" className={LINK_CLASS}>
+      Invitations
+    </Link>
+  );
+}

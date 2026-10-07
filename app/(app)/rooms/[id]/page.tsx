@@ -2,11 +2,19 @@ import { FocusTimer } from "@/components/focus-timer";
 import { GoalsPanel } from "@/components/goals-panel";
 import { ResourceLibrary } from "@/components/resources/resource-library";
 import { RoomChat } from "@/components/room-chat";
+import { RoomInvitePanel } from "@/components/room-invite-panel";
+import { RoomRoster } from "@/components/room-roster";
 import { Badge } from "@/components/ui/badge";
 import { listMessages } from "@/lib/chat/queries";
 import { FocusSessionError } from "@/lib/focus/sessions";
 import { getFocusWorkspace } from "@/lib/focus/workspace";
 import { listGoals } from "@/lib/goals/queries";
+import {
+  listRoomInvitations,
+  readRoomVisibility,
+  RosterDeniedError,
+  roomRoster,
+} from "@/lib/invitations/queries";
 import { listResources } from "@/lib/resources/queries";
 import { createClient } from "@/lib/supabase/server";
 import { MESSAGE_PAGE_SIZE_DEFAULT } from "@/lib/validation/chat";
@@ -28,12 +36,16 @@ type RoomPageProps = {
 
 /**
  * The shared study workspace: focus timer, the viewer's own goals, the room
- * chat, and recent sessions for a room.
+ * chat, and recent sessions for a room — plus the member roster, and the
+ * owner's invite panel when this is a private room.
  *
  * Membership is decided by the workspace read itself — a non-member and a
  * missing room both land on the same 404, so the URL never reveals which
  * rooms exist. Goals are read afterwards, through RLS, and are the caller's
- * own only.
+ * own only. The roster repeats the membership check inside its own RPC, and
+ * the invite panel only renders when the viewer both owns this room and the
+ * room is private (007) — every invitation decision itself is re-proven by
+ * the API regardless of what this page chose to render.
  */
 export default async function RoomWorkspacePage({ params }: RoomPageProps) {
   const supabase = await createClient();
@@ -82,6 +94,34 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
   ]);
   const { room, member_count, viewer_role } = workspace;
 
+  // Membership is already proven by the workspace read above. The roster
+  // re-checks it inside its own SECURITY DEFINER RPC, so the only failure it
+  // can report here means the caller lost the seat between the two reads —
+  // the same verdict as any other non-member: notFound.
+  const [membersOrNull, visibility] = await Promise.all([
+    roomRoster(supabase, parsedRoomId.data).catch((error: unknown) => {
+      if (error instanceof RosterDeniedError) return null;
+      throw error;
+    }),
+    readRoomVisibility(supabase, parsedRoomId.data),
+  ]);
+  if (membersOrNull === null) {
+    notFound();
+  }
+  const members = membersOrNull;
+
+  // Invitations exist for private rooms only, and only the owner manages
+  // them; the owner's pending rows are read through the same RLS that
+  // restricts them to the rows this viewer created, and only rows that are
+  // actually still pending feed the panel — resolved history lives in the
+  // invitee's inbox, not here.
+  const showInvitePanel = viewer_role === "owner" && visibility === "private";
+  const pendingInvitations = showInvitePanel
+    ? (await listRoomInvitations(supabase, parsedRoomId.data)).filter(
+        (row) => row.status === "pending",
+      )
+    : [];
+
   return (
     <section className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
@@ -116,11 +156,31 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
         )}
       </header>
 
-      {/* Keyed per room like the chat below: the timer owns the session
+      {/* Keyed per room like the chat: a room switch must never show the
+          previous room's members or its owner's pending invitations while
+          the new room's request is still in flight. */}
+      <RoomRoster
+        key={`roster-${room.id}`}
+        roomId={room.id}
+        members={members}
+      />
+
+      {showInvitePanel && (
+        <RoomInvitePanel
+          key={`invite-${room.id}`}
+          roomId={room.id}
+          initialPending={pendingInvitations}
+        />
+      )}
+
+      {/* Keyed per room like the chat: the timer owns the session
           snapshot and the `studying` flag presence reports, and neither may
-          survive a room switch while the new room's request is in flight. */}
+          survive a room switch while the new room's request is in flight.
+          The key is distinct from its siblings' — two children of the same
+          parent sharing a key is unsupported and can duplicate or drop
+          subtrees whenever React has to regenerate the tree. */}
       <FocusTimer
-        key={room.id}
+        key={`timer-${room.id}`}
         roomId={room.id}
         roomName={room.name}
         initialSession={workspace.session}
@@ -132,8 +192,9 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
       <GoalsPanel roomId={room.id} initialGoals={goals} />
 
       {/* Keyed per room so a room switch cannot show the previous room's
-          messages or connection badge while the new channel joins. */}
-      <RoomChat key={room.id} roomId={room.id} initialMessages={messages} />
+          messages or connection badge while the new channel joins. Distinct
+          key prefix for the same reason as the timer above. */}
+      <RoomChat key={`chat-${room.id}`} roomId={room.id} initialMessages={messages} />
 
       {/* Same keying rationale: files from another room must never be listed
           while the new room's request is still in flight. */}
