@@ -29,7 +29,8 @@ export type InvitationErrorCode =
   | "revoked"
   | "expired"
   | "room_full"
-  | "room_closed";
+  | "room_closed"
+  | "blocked";
 
 /** Failure carrying the HTTP status the API layer returns. */
 export class InvitationError extends Error {
@@ -123,6 +124,11 @@ const ERROR_RESULTS: Record<
     code: "room_closed",
     status: 409,
     message: "This room is closed and is not accepting new members.",
+  },
+  blocked: {
+    code: "blocked",
+    status: 409,
+    message: "This invitation is not available.",
   },
 };
 

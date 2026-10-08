@@ -440,7 +440,7 @@ accepted.
 | 400 | `validation` (id not a UUID) / `invalid_request` (non-empty body) |
 | 401 | `unauthenticated` |
 | 404 | `not_found` — missing, not addressed to the caller, or revoked: all identical |
-| 409 | `used` / `rejected` / `revoked` / `room_full` / `room_closed` |
+| 409 | `used` / `rejected` / `revoked` / `room_full` / `room_closed` / `blocked` (the invitee has blocked the inviter — `409`, symmetric with the chat filter) |
 | 410 | `expired` — no row is written |
 | 500 | `invitation_accept_failed` |
 
@@ -464,6 +464,128 @@ ephemeral channel; the roster annotates rows client-side from it).
 
 ---
 
+## Moderation, reporting and blocking (PR 09)
+
+| Method | Path | Summary |
+| --- | --- | --- |
+| `POST`/`GET` | `/api/rooms/[id]/reports` | File a report / the moderator inbox listing |
+| `PATCH` | `/api/reports/[reportId]` | Advance one report through its status machine |
+| `DELETE` | `/api/rooms/[id]/members/[alias]` | Remove a member from the room |
+| `POST`/`DELETE` | `/api/rooms/[id]/members/[alias]/mute` | Mute / unmute a member |
+| `POST`/`DELETE` | `/api/rooms/[id]/members/[alias]/moderator` | Appoint / revoke a room moderator (owner only) |
+| `POST`/`GET` | `/api/blocks` | Block a student / list the caller's own blocks |
+| `DELETE` | `/api/blocks/[alias]` | Unblock |
+
+All of it is **room-scoped moderation**: the owner and the aliases in
+`room_moderators` can act, and there is no global admin role anywhere in the
+schema. Every privileged mutation writes exactly one `moderation_actions` row
+in the same transaction as the mutation; those tables carry no `INSERT` grant
+at all, so only the SECURITY DEFINER RPCs can write them.
+
+### `POST /api/rooms/[id]/reports`
+
+Membership is proven first (`404 not_found` for a non-member — never a
+room-existence oracle), then the strict body union: `{ subject_type: "user",
+subject_alias }` or `{ subject_type: "message" | "resource", subject_id }`,
+plus `reason` (closed enum) and optional `detail` (≤500 chars). The reporter
+identity is **never read from the body** — `create_moderation_report` pins
+`reporter_id = auth.uid()` — and no response ever contains it.
+
+`201 { "report": { "id", "status", "created_at" } }` ·
+`200 { "report": {…}, "duplicate": true }` (idempotent repeat of an open
+report by the same reporter on the same subject) · `400 validation` /
+`invalid_json` · `401` · `404 not_found` (non-member or unknown subject) ·
+`409 self_report` · `500 report_failed`.
+
+### `GET /api/rooms/[id]/reports`
+
+Owner or moderator only — a plain member gets `403 not_moderator`, a
+non-member the usual `404`. Returns the moderator projection (`id`,
+`subject_type`, `subject_id`, `subject_alias`, `reason`, `detail`, `status`,
+`created_at`, `resolved_at`, `resolved_by`) plus `count`. `reporter_id` has
+**no column grant at all**: there is nothing to select and nothing to leak.
+
+`200 { "reports": [...], "count": n }` · `400` (bad room id or `limit`) ·
+`401` · `403 not_moderator` · `404` · `500 moderation_failed`.
+
+### `PATCH /api/reports/[reportId]`
+
+Body `{ "status": "reviewing" | "resolved" | "dismissed" }`. The report id
+is opaque and the room never enters the path, so a caller who is not a
+moderator of the report's room receives **`404 not_found` — the same answer
+a missing id gets** (no existence oracle). `pending` cannot be set (`400
+validation`) and terminal states never reopen (`409 invalid_transition`).
+Each transition writes one `moderation_actions` row (`report_reviewed` /
+`report_resolved` / `report_dismissed`).
+
+`200 { "report": { "id", "status" } }` · `400` · `401` · `404` ·
+`409 invalid_transition` · `500 report_failed`.
+
+### `DELETE /api/rooms/[id]/members/[alias]`
+
+Bodyless. Owner or moderator; the owner (`403 cannot_remove_owner`) and self
+(`403 cannot_remove_self`) are refused, a plain member attempting it gets
+`403 not_moderator`, a non-member `404`. Deletes the membership, writes one
+`member_removed` audit row and returns the new count. The target loses the
+roster, chat history, room resources and presence immediately — every read
+is RLS, and the API routes answer `404`.
+
+`200 { "removed": true, "member_count": n }` · `401` · `403` · `404` ·
+`500 moderation_failed`.
+
+### `POST` / `DELETE …/members/[alias]/mute`
+
+`POST { "duration": "1h" | "24h" | "7d" }` → `201 { "muted": true,
+"muted_until", "duration" }`. The actor gate runs first (`403
+not_moderator`), then **self** (`cannot_mute_self` — so an owner cannot mute
+themselves), the owner (`cannot_mute_owner`) and other moderators
+(`cannot_mute_moderator`); an active mute is `409 already_muted`. `DELETE`
+lifts → `200 { "unmuted": true }`, or `409 not_muted`. The mute is enforced
+twice — in the RPC and in the `room_messages` INSERT policy — so a direct
+PostgREST insert cannot bypass it; the composer sees `403 muted` and the
+muted member's own page disables it up front.
+
+### `POST` / `DELETE …/members/[alias]/moderator`
+
+Owner only (`403 not_owner`), bodyless. `POST` appoints, `DELETE` revokes;
+the target must be a member and can never be the owner (`403
+cannot_moderate_owner`). `200 { "role": "moderator" | "student", "changed":
+bool, "granted": bool }` — `changed: false` is the idempotent repeat and
+writes no audit row. Appointment is an alias row in `room_moderators`;
+revocation takes effect on the target's next authorization check.
+
+### `POST /api/blocks` · `GET /api/blocks` · `DELETE /api/blocks/[alias]`
+
+Blocks are **private to the blocker**: `GET` only ever returns rows whose
+`blocker_id` is the caller, and no payload anywhere says who blocked whom.
+`POST { "alias" }` → `201 { "block": { "alias", "created_at" }, "created":
+true }`, repeat → `200 { …, "created": false }`, self-block → `409
+self_block`, unknown alias → `404`. `DELETE` → `200 { "removed": bool }`
+(idempotent).
+
+Blocking is enforced by one clause on the `room_messages` **SELECT** policy:
+the blocker stops receiving the target's messages — history, direct reads
+and live arrival alike, since `postgres_changes` is subject to the
+subscriber's own RLS — and invitation acceptance between the two is refused
+(`409 blocked`) until unblocked. The blocked user keeps seeing the blocker's
+messages and is told nothing.
+
+### Moderation error codes
+
+| Status | Code | When |
+| --- | --- | --- |
+| 400 | `validation` / `invalid_json` / `invalid_request` | bad body, unknown field, malformed id |
+| 401 | `unauthenticated` | no session |
+| 403 | `not_moderator` / `not_owner` / `cannot_remove_owner` / `cannot_remove_self` / `cannot_mute_owner` / `cannot_mute_moderator` / `cannot_mute_self` / `cannot_moderate_owner` / `muted` (chat send) | privesc or forbidden target; the room is already proven visible, so 403 leaks nothing |
+| 404 | `not_found` | room not visible, member or subject not in the room, report not visible to a non-moderator |
+| 409 | `self_report` / `self_block` / `already_muted` / `not_muted` / `invalid_transition` / `blocked` (invitation accept) | state conflicts; a duplicate report answers idempotent `200`, not 409 |
+| 500 | `report_failed` / `moderation_failed` / `blocks_failed` | hygiene |
+
+Rate limiting is still **not implemented anywhere** (see below); PR 10 owns
+that mechanism, and these routes are listed in its remit.
+
+---
+
 ## Not implemented, on purpose
 
 | Concern | Status |
@@ -476,4 +598,6 @@ ephemeral channel; the roster annotates rows client-side from it).
 | Bearer invite links / `/invite/[token]` | **Superseded, not built.** PR 07's spec called for a single-use token URL; the shipped design addresses invitations to an alias instead (no token exists to leak, forward or enumerate). See the reconciliation in `docs/prs/PR-07-private-invitations.md`. |
 | Inviting by email / phone / any contact data | **Never.** The app collects no contact data; delivery is the inbox itself. Revisit with PR 11 if product wants notifications. |
 | Invitations to public rooms | Refused (`409 room_public`): `join_room` already handles public entry. |
+| Global `/moderation` dashboard | **Not built.** Reports are room-scoped and authorization is per-room; the moderation inbox mounted in the room workspace is the product contract (PR 09's reconciliation). |
+| Message removal / soft-hide | **Never in v1.** `room_messages` keeps no `UPDATE`/`DELETE` grant and no hidden columns — moderators act at the member level (mute/remove) and reports carry the context. |
 | AI summaries / quizzes | Explicitly out of scope for this milestone. |

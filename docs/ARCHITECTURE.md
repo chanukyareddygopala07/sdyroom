@@ -45,7 +45,7 @@ Two rules define the codebase:
 | `lib/rooms/access.ts` | The shared membership/ownership gates (`requireRoomMembership`, `requireRoomOwner`) that give non-members the same `404` as a missing room. |
 | `lib/api/responses.ts` | The one error envelope: `{ error: { code, message, issues? } }`. |
 | `lib/supabase/` | `proxy.ts` (session refresh + page redirects), `server.ts` (cookie-scoped server client), `client.ts` (browser client). No service-role key exists in the repo. |
-| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0008` are append-only; existing files are never edited. |
+| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0009` are append-only; existing files are never edited. |
 | `tests/unit` | Vitest, no network: validators, queries against fake builders, every route's status matrix, component behaviour. |
 | `tests/integration` | Vitest against the real local stack with real auth users: RLS/grant probes, RPC races, HTTP-level handler tests. Never uses a service-role key (SQL fixtures go through `docker exec psql`). |
 | `tests/e2e` | Playwright + Chromium driving the real `next dev` app: two-browser flows, WebSocket frame capture/replay, teardown scoped to a per-run user id. |
@@ -53,7 +53,7 @@ Two rules define the codebase:
 
 ## Data model
 
-Eight tables, all with RLS enabled, all granted explicitly column by column
+Thirteen tables, all with RLS enabled, all granted explicitly column by column
 (`auto_expose_new_tables = false`):
 
 | Table | Owns |
@@ -63,15 +63,23 @@ Eight tables, all with RLS enabled, all granted explicitly column by column
 | `room_members` | Membership rows `(room_id, user_id, role)`; `role ∈ owner, student`. Read-your-own only — the roster reads through the `room_roster` RPC instead of a wider policy. |
 | `focus_sessions` | One active session per room (partial unique index), owner-controlled state machine, read-only grant for clients. |
 | `study_goals` | Personal goals, trigger-owned timestamps, partial unique active-title index. |
-| `room_messages` | Append-only chat (`SELECT`/`INSERT` only) with a monotonic `seq` cursor. |
+| `room_messages` | Append-only chat (`SELECT`/`INSERT` only) with a monotonic `seq` cursor; `0009` narrowed both policies — the SELECT policy skips messages from people the viewer blocked, the INSERT policy refuses an actively muted member. |
 | `study_resources` | File metadata for the private `study-resources` storage bucket; `owner_id` holds no grant at all. |
-| `room_invitations` | Addressed invitations (inviter → invitee by alias), read-only grant for clients; create/accept/reject/revoke are RPCs. Expiry is read-time derived, never a stored state. |
+| `room_invitations` | Addressed invitations (inviter → invitee by alias), read-only grant for clients; create/accept/reject/revoke are RPCs. Expiry is read-time derived, never a stored state. `0009` re-created acceptance with a block check. |
+| `moderation_reports` | Room-scoped reports with a closed reason enum and the `pending → reviewing → resolved\|dismissed` machine. `reporter_id` has no `SELECT` grant; writes are RPC-only. |
+| `moderation_actions` | One immutable audit row per privileged moderation mutation (`actor_id = auth.uid()`); no client grants of any kind. |
+| `room_mutes` | The active mute per (room, member) with `muted_until`; `SELECT`-only for members, RPC-only writes, and the source of the `room_messages` insert-policy check. |
+| `room_moderators` | Aliases appointed by the room owner — the *only* moderator concept; there is no global role. |
+| `user_blocks` | The blocker's own rows (`blocker_id = auth.uid()` own-rows policy); RPC-only writes; read by the chat filter and the invitation accept. |
 
 Membership flows (join, leave, invitation acceptance) all funnel through
 `SECURITY DEFINER` RPCs because an RLS `WITH CHECK` cannot take the row lock
 that makes the capacity check safe. `0007` factored the seat logic into
 `join_room_core` so `join_room` and invitation acceptance share one
-implementation; the core is executable by no application role.
+implementation; the core is executable by no application role. Moderation
+follows the same pattern (`0009`): reports, verdicts, mutes, removals,
+appointments and blocks are all definer RPCs so identity, subject-in-room and
+the audit row are proved in one transaction.
 
 ## Read/write flows
 
@@ -131,14 +139,25 @@ observation, two readers, no second socket.
 
 ## Frontend composition
 
-The room workspace (`/rooms/[id]`) is one server component that seeds five
+The room workspace (`/rooms/[id]`) is one server component that seeds the
 client panels: `RoomRoster`, the owner's `RoomInvitePanel` (private rooms
-only), `FocusTimer`, `GoalsPanel`, `RoomChat` and `ResourceLibrary`. Each is
+only), `FocusTimer`, `GoalsPanel`, `RoomChat`, `ResourceLibrary`, and — when
+the viewer is the owner or an appointed moderator — `ModerationInbox`. The
+same read also fetches the caller's moderation view (`room_moderation_info`:
+can-I-moderate, moderator aliases, mute state) and their own block list,
+which the roster menus and the chat composer consume. Each panel is
 keyed per room so a room switch can never show the previous room's state
 while the new request is in flight. Presence annotations are deliberately
 server-free (the roster is a page read; presence is a client store), and
 dates are rendered as fixed UTC slices — never `toLocale*` — because the
 server and the browser must format identically or hydration breaks.
+
+The report dialog is a single shared component (`components/report-dialog.tsx`)
+hosted wherever a report can start — a chat message, the roster's member menu,
+a room file — so the reason list, the strict body and the "the reporter is
+never shown" guarantee exist in exactly one place. Destructive moderation
+actions confirm through Radix `alert-dialog`; everything else answers from
+server truth via `router.refresh()` rather than optimistic local state.
 
 Invitations surface in two places: the owner's invite panel inside the
 workspace, and the invitee's inbox at `/invitations` (nav-linked). There is

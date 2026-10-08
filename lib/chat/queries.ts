@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getRoomModerationInfo } from "@/lib/moderation/queries";
 import type { ChatMessageView } from "./types";
 
-export type ChatErrorCode = "validation" | "not_found";
+export type ChatErrorCode = "validation" | "not_found" | "muted";
 
 /** Failure carrying the HTTP status the API layer returns. */
 export class ChatError extends Error {
@@ -178,7 +179,31 @@ export async function createMessage(
     .single();
 
   if (error) {
-    if (error.code === "42501" || error.code === "23503") {
+    // The INSERT policy denies exactly two ways after the route's membership
+    // gate: a race with removal, or an active mute. The caller's own mute
+    // row (readable through the moderation info RPC) settles which — a muted
+    // send gets its honest 403, everything else keeps the 404 that never
+    // confirms what the room looks like.
+    if (error.code === "42501") {
+      try {
+        const info = await getRoomModerationInfo(client, input.roomId);
+        if (info.viewer_is_muted) {
+          throw new ChatError(
+            "muted",
+            "You are muted in this room, so your message was not sent.",
+            403,
+          );
+        }
+      } catch (infoError) {
+        if (infoError instanceof ChatError) {
+          throw infoError;
+        }
+        // Not a member any more (or the lookup itself failed): same 404 as
+        // a room that never existed.
+      }
+      throw new ChatError("not_found", ROOM_MISSING, 404);
+    }
+    if (error.code === "23503") {
       throw new ChatError("not_found", ROOM_MISSING, 404);
     }
     throw new Error(`message insert failed: ${error.message}`);

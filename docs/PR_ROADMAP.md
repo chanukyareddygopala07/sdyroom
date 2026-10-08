@@ -6,7 +6,7 @@ implementation specification in [`docs/prs/`](prs/).
 
 > **These are specifications, not GitHub pull requests.** Nothing in
 > `docs/prs/` exists as a PR on the repository. As of this writing GitHub shows
-> **6 PRs merged (01–06), 1 open (PR #7)**. A spec becomes a PR only when a
+> **8 PRs merged (01–08), 1 open (PR #9)**. A spec becomes a PR only when a
 > developer creates a branch and opens one.
 
 ---
@@ -78,15 +78,15 @@ first place a secret enters the project.
 
 ## 3. PR inventory
 
-14 remaining PRs: 11 of the 13 requested (08–18 — 06 and 07 have merged) plus 3
-discovered during the audit (19–21). Each has a spec in `docs/prs/`.
+13 remaining PRs: 10 of the 13 requested (09–18 — 06, 07 and 08 have merged)
+plus 3 discovered during the audit (19–21). Each has a spec in `docs/prs/`.
 
 | PR | Feature | Spec | Owner | Depends on | Migration | Complexity | Status |
 | -- | --- | --- | --- | --- | --- | -- | --- |
 | 06 | Realtime room presence | [`PR-06`](prs/PR-06-room-presence.md) | A (OpenCode) | merged main | `0006` | Medium | Merged — [PR #6](https://github.com/chanukyareddygopala07/sdyroom/pull/6) (`91d2bed`) |
 | 07 | Private room invitations + roster | [`PR-07`](prs/PR-07-private-invitations.md) | B (Cursor) | 06 | `0007` | Medium–Large | Merged — [PR #7](https://github.com/chanukyareddygopala07/sdyroom/pull/7) (`b4e1f33`) |
-| 08 | Room management (edit / close / delete) | [`PR-08`](prs/PR-08-room-management.md) | A | 07 | `0008` | Medium | In review — [PR #8](https://github.com/chanukyareddygopala07/sdyroom/pull/8) |
-| 09 | Moderation, reporting, blocking | [`PR-09`](prs/PR-09-moderation.md) | B | 07, chat | `0009` | Large | Pending |
+| 08 | Room management (edit / close / delete) | [`PR-08`](prs/PR-08-room-management.md) | A | 07 | `0008` | Medium | Merged — [PR #8](https://github.com/chanukyareddygopala07/sdyroom/pull/8) (`61a99a0`) |
+| 09 | Moderation, reporting, blocking | [`PR-09`](prs/PR-09-moderation.md) | B | 07, chat | `0009` | Large | In review — [PR #9](https://github.com/chanukyareddygopala07/sdyroom/pull/9) |
 | 10 | File & upload security hardening | [`PR-10`](prs/PR-10-resource-security.md) | B | merged main (05) | `0010` | Medium–Large | Pending |
 | 11 | Notifications | [`PR-11`](prs/PR-11-notifications.md) | A | 07, 09, 19, 20 | `0011` | Medium | Pending |
 | 12 | AI document processing foundation | [`PR-12`](prs/PR-12-ai-document-foundation.md) | B | merged main (05) | `0012` | Large | Pending |
@@ -259,7 +259,7 @@ number is wrong because the shipped PRs were all foundation work.
 
 | Question | Answer |
 | --- | --- |
-| **How many PRs remain?** | **14** (08–21): 08 in review, 13 pending. |
+| **How many PRs remain?** | **13** (09–21): 09 in review, 12 pending. |
 | **Which can run in parallel?** | 19, 20, 21 (all three, any order); 10 runs alongside the whole Collaboration lane; 17 runs alongside 08–09 (after 06, which has merged). |
 | **Which block AI?** | **12** is the gate for everything AI. 13/14/16/15 sit behind it in order. Nothing in the Collaboration lane blocks AI — the AI track only needs merged `main` (PR 05) plus, for the planner, 14 and 16. |
 | **Which block public launch?** | **10** (rate limiting + orphan cleanup), **18** (headers/CSP, monitoring, backups, load tests, a11y), **09** (you cannot open public rooms to strangers without moderation), **19** (mobile + a11y), **21** (coverage gate). 06/07/08/11 are product-complete-ness, not launch-safety; 12–17 are post-launch-eligible. |

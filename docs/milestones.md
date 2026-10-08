@@ -16,7 +16,8 @@ Working log: what has landed, what each milestone still owes.
 | Room presence — `0006_realtime_private_channels.sql`, private-channel policies, roster UI and `studying` flag | `91d2bed` (PR #6) | done |
 | I — private notes and PDF sharing: `0005_study_resources.sql`, private storage bucket, resource APIs, personal/room library | `4880163` (PR #5) | done |
 | Private room invitations + member roster — `0007_room_invitations.sql`, addressed invitations, invite inbox, owner invite panel, `room_roster` RPC | `b4e1f33` (PR #7) | done |
-| Room management — `0008_room_management.sql` (`update_room` / `delete_room` RPCs, room-owner storage sweep policy), owner-only settings page, `PATCH`/`DELETE /api/rooms/[id]`, type-the-name delete confirmation | `feat/room-management` | in review (PR #8) |
+| Room management — `0008_room_management.sql` (`update_room` / `delete_room` RPCs, room-owner storage sweep policy), owner-only settings page, `PATCH`/`DELETE /api/rooms/[id]`, type-the-name delete confirmation | `61a99a0` (PR #8) | done |
+| Member safety — `0009_moderation.sql` (reports, one-way blocks, mutes enforced by the insert policy, member removal, owner-appointed moderators, audit trail), moderation inbox, shared report dialog, roster action menu | `feat/moderation-safety` | in review (PR #9) |
 
 ## Milestone D — task breakdown
 
@@ -444,8 +445,9 @@ Working log: what has landed, what each milestone still owes.
   alias and accepted from their `/invitations` inbox, and a private room stays
   invisible to public discovery and to `join_room` for non-members — accepting
   an invitation never makes it public. Email/phone invitations and invite links
-  are deliberately not built (the app collects no contact data); room
-  moderation of members (kicking, transfer) is PR 09.
+  are deliberately not built (the app collects no contact data); member
+  moderation (report, block, mute, remove, owner-appointed moderators) shipped
+  in PR 09, ownership transfer does not exist.
 - **Room editing and deletion are owner-only (PR 08).** The mutable fields
   (name, shared goal, exam track, subject, language, capacity, open/closed
   status) are edited through `PATCH /api/rooms/[id]` and deleted through
@@ -456,8 +458,10 @@ Working log: what has landed, what each milestone still owes.
   unchangeable. Ownership transfer and visibility changes are explicit
   follow-ups.
 - **No alias editing.** Changing the study alias after onboarding is not built.
-- **No typing indicators, chat moderation or file previews.** Chat is
-  append-only history (no edit, delete or react); room presence shows who is
+- **No typing indicators or file previews.** Chat is
+  append-only history (no edit, delete or react) with member safety layered on
+  in PR 09 (mutes enforced by the insert policy, blocks filtering the select
+  policy, reports routed to the owner's inbox); room presence shows who is
   in the room and whether a shared session is running (alias + flag only, no
   ids); files are downloaded rather than previewed inline, with no versioning,
   no per-room quota UI and no search beyond the title/subject/chapter filters.
