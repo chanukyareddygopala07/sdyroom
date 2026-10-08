@@ -1,21 +1,298 @@
-<img alt="SdyRoom" src="https://demo-nextjs-with-supabase.vercel.app/opengraph-image.png">
 <h1 align="center">SdyRoom</h1>
 
 <p align="center">
- Capacity-limited study rooms for exam prep, built with Next.js and Supabase
+  <strong>Study together. Stay accountable. Achieve more.</strong>
+</p>
+
+<p align="center">
+  Capacity-limited study rooms for exam prep — shared focus timers, goals, realtime
+  chat, private file sharing and member safety, built with Next.js and Supabase.
+</p>
+
+<p align="center">
+  <a href="https://github.com/chanukyareddygopala07/sdyroom/actions/workflows/ci.yml"><img src="https://github.com/chanukyareddygopala07/sdyroom/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2ea44f.svg" alt="License: MIT"></a>
+  <a href="https://nextjs.org"><img src="https://img.shields.io/badge/Next.js-black?logo=nextdotjs&logoColor=white" alt="Next.js"></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="https://supabase.com"><img src="https://img.shields.io/badge/Supabase-3FCF8E?logo=supabase&logoColor=white" alt="Supabase"></a>
+  <a href="https://tailwindcss.com"><img src="https://img.shields.io/badge/Tailwind_CSS-38BDF8?logo=tailwindcss&logoColor=white" alt="Tailwind CSS"></a>
 </p>
 
 <p align="center">
   <a href="#features"><strong>Features</strong></a> ·
   <a href="#demo"><strong>Demo</strong></a> ·
-  <a href="#deploy-to-vercel"><strong>Deploy to Vercel</strong></a> ·
-  <a href="#clone-and-run-locally"><strong>Clone and run locally</strong></a> ·
-  <a href="#feedback-and-issues"><strong>Feedback and issues</strong></a>
-  <a href="#more-supabase-examples"><strong>More Examples</strong></a>
+  <a href="#architecture"><strong>Architecture</strong></a> ·
+  <a href="#security"><strong>Security</strong></a> ·
+  <a href="#testing"><strong>Testing</strong></a> ·
+  <a href="#getting-started"><strong>Getting Started</strong></a> ·
+  <a href="#documentation"><strong>Documentation</strong></a> ·
+  <a href="#contributing"><strong>Contributing</strong></a>
 </p>
-<br/>
 
-## Pinned dependency versions
+## 🎯 What is SdyRoom?
+
+SdyRoom is a study-together platform for students preparing for competitive and
+university examinations — JEE, NEET, GATE, semester exams and more. Sign up with a
+password, pick a unique **study alias** once (your email is never shown to anyone),
+discover public study rooms or create your own capacity-limited room, and study
+"together" with a shared focus timer, personal goals, realtime chat and private file
+sharing.
+
+**The problem it solves:** students rarely lack content — they lack consistent
+habits, focused sessions, study partners and accountability. SdyRoom makes studying
+alone feel less alone **without** requiring anyone to share a phone number, email or
+social profile: collaboration happens through aliases inside authenticated rooms,
+guarded by database-level authorization, so it is privacy-first by construction.
+
+Built with **Next.js 16 (App Router)** and **Supabase** (Auth, Postgres with Row
+Level Security, Storage, Realtime).
+
+<a name="features"></a>
+
+## ✨ Features
+
+### ✅ Implemented
+
+- 🔑 Password authentication with cookie sessions (`@supabase/ssr`) and a one-time
+  study-alias onboarding
+- 🔍 Public room discovery with `?q=` search over name, subject and exam track
+- 🚪 Capacity-limited rooms (1–100 seats), public/private and open/closed, with
+  owner-only settings and type-the-name deletion
+- ⏱ Shared focus sessions: an owner-driven timer state machine in Postgres, synced
+  in realtime, with history and server-persisted expiry
+- 🎯 Personal goals that stay private even from the room owner
+- 💬 Realtime room chat: append-only, cursor-paginated, RLS-filtered at delivery
+- 📍 Live presence on the roster (who is in the room / studying)
+- 📨 Alias-addressed invitations with an inbox — no invite links to forward or
+  enumerate
+- 📁 Study resources: personal library + room sharing, magic-byte validation,
+  20 MiB ceiling, 300-second signed downloads, storage quotas, rate limits and
+  orphan cleanup
+- 🛡 Member safety: reports, one-way blocks, mutes, member removal, owner-appointed
+  room moderators, and a moderation inbox that never shows the reporter
+- 🌗 Light and dark themes
+
+### 🚧 In Review
+
+Nothing is in review right now — the next candidates are listed under
+[Planned](#planned) and the [Roadmap](#roadmap).
+
+<a name="planned"></a>
+
+### 🔮 Planned
+
+The ordered plan lives in [`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) and
+[`docs/milestones.md`](docs/milestones.md); highlights:
+
+- Notifications (PR 11)
+- AI study assistance — document Q&A over your own notes, quizzes, a study planner
+  and analytics (PRs 12–16)
+- Richer room discovery (PR 17)
+- Production hardening — security headers/CSP, monitoring, backups, load testing
+  (PR 18)
+- Mobile/responsive shell and accessibility baseline (PR 19), profile and settings
+  (PR 20), coverage gates (PR 21)
+
+<a name="demo"></a>
+
+## 🖥️ Screenshots & Demo
+
+No screenshots or demo recordings are checked in yet, and this repository does not
+host a public deployment — so there is no live demo link to click. Run it locally
+instead: [Getting Started](#getting-started).
+
+<!-- TODO: add real screenshots/GIFs under docs/images/ and reference them here, e.g.
+     <div align="center"><img src="docs/images/rooms.png" alt="SdyRoom room discovery" width="900"></div>
+     See docs/images/README.md for naming and size conventions. -->
+
+<a name="architecture"></a>
+
+## 🏗️ Architecture
+
+Two rules describe the whole design (from
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)):
+
+1. **Authorization lives in the database.** Row Level Security policies and
+   `SECURITY DEFINER` RPCs re-check every rule server-side, and the API re-checks
+   the same rule before it answers — a bug in one layer leaves the other standing.
+2. **Identity is never a parameter.** Handlers read the Supabase session claims;
+   RPCs read `auth.uid()`; nothing accepts "on behalf of" input.
+
+```mermaid
+flowchart TB
+    U["Student's browser<br/>light / dark theme"]
+
+    subgraph APP["Next.js 16 · App Router"]
+        P["proxy.ts<br/>session refresh + route gating"]
+        R["app/(app)/* pages<br/>server components, rendered per request"]
+        H["app/api/* route handlers<br/>Zod validation · one error envelope"]
+        L["lib/* feature modules<br/>user-scoped queries · explicit column lists"]
+    end
+
+    subgraph SUP["Supabase — local stack in development"]
+        A["Auth<br/>cookie sessions via @supabase/ssr"]
+        D[("Postgres<br/>14 tables · RLS · grants · RPCs · rate limits")]
+        S[("Storage<br/>private study-resources bucket")]
+        T["Realtime<br/>chat · presence · focus sessions"]
+    end
+
+    U --> P
+    P --> R
+    P --> H
+    R --> H
+    H --> L
+    L --> A
+    L --> D
+    L --> S
+    D --> T
+    T --> U
+```
+
+A typical request: `proxy.ts` refreshes the session (sending unauthenticated
+visitors to `/auth/login`, except `/`, `/auth/*` and `/api/*`), the page or handler
+validates input with Zod, a `lib/` module runs the query through the user-scoped
+Supabase client, Postgres re-authorizes it through RLS / grants / RPCs, and the
+response is shaped with an explicit column list — failures answer through the single
+error envelope `{ error: { code, message, issues? } }`.
+
+CI mirrors that shape:
+
+```mermaid
+flowchart LR
+    G["push / pull request"] --> C["GitHub Actions<br/>.github/workflows/ci.yml"]
+    C --> Q["quality<br/>lint · tsc · unit tests · build"]
+    Q --> I["integration<br/>local Supabase from scratch"]
+    Q --> E["e2e<br/>Playwright + Chromium"]
+```
+
+### How the pieces fit together
+
+- **Session**: `proxy.ts` → `lib/supabase/proxy.ts#updateSession` refreshes cookies
+  and sends unauthenticated visitors (everything except `/`, `/auth/*` and `/api/*`)
+  to `/auth/login`. API routes are exempt on purpose so a `fetch` client gets the
+  documented JSON `401` instead of an HTML redirect. Each session-gated page re-checks the session and, for rooms, the
+  profile row; they export `instant = false` because the project runs with
+  `cacheComponents` and these routes must render per request.
+- **Validation**: `lib/validation/` (Zod) mirrors the CHECK constraints in
+  `supabase/migrations/0001_init.sql`, so bad input is rejected in the browser, at
+  the API boundary and again in the database.
+- **Database access**: `lib/profiles/queries.ts` and `lib/rooms/` — public rooms are
+  read with an explicit column list and mapped through `toPublicRoom()`, so
+  `owner_id` and any future private column can never reach a response. Rooms are
+  only ever created through the `create_room` RPC, and membership only through
+  `join_room` / `leave_room`: the owner (or the caller) is always taken from
+  `auth.uid()` and never accepted from the client, and the seat check shares a row
+  lock with the insert so racing students cannot exceed `capacity`. Occupancy is an
+  aggregate over public rooms only (`public_room_member_counts`), so no participant
+  identity or private-room count is ever disclosed.
+- **Focus sessions**: `lib/focus/` reads through `focus_session_state` and writes
+  through `start` / `pause` / `resume` / `end`, all owner-checked inside the
+  database. A partial unique index allows at most one active session per room, so a
+  concurrent race resolves to `already_active` instead of a second row, and
+  `toFocusSession()` re-validates every payload (paused ⇔ `paused_at`, finished ⇔
+  `ended_at`) before it reaches a client. The workspace page subscribes to realtime
+  changes on `focus_sessions`, polls as a fallback and re-reads the same
+  `getFocusWorkspace` the server rendered with, so a reconnect can never restart or
+  rewind a timer.
+- **Personal goals**: `lib/goals/` addresses only the caller's own rows; the partial
+  unique index on `(user_id, room_id, lower(title)) where status = 'active'` yields
+  `409 duplicate_goal`, the title frees up on completion, and a trigger owns
+  `completed_at` / `updated_at`.
+- **Room chat**: `lib/chat/` seeds history from the workspace page and appends
+  through `POST /api/rooms/[id]/messages`; `room_messages` is append-only (only
+  `SELECT`/`INSERT` are granted), the sender is pinned to `auth.uid()` by RLS and
+  never returned as an id — the API maps it onto the viewer-relative `is_own` — and
+  `seq` gives a stable total order for `before=` cursor pagination. Rows reach
+  members over `supabase_realtime`, with RLS applied at delivery, and the client
+  deduplicates by id because a send can be confirmed by both the POST response and
+  its own event.
+- **Study resources**: `lib/resources/` validates the file (magic bytes, 20 MiB
+  ceiling, filename shape, unknown multipart parts rejected outright), builds the
+  storage key from server-generated UUIDs only, and writes the object *before* the
+  metadata row — a failed insert rolls the object back, so no orphan is advertised.
+  The same scope is enforced twice, independently: table RLS for the metadata and
+  storage RLS for the bytes, both derived from `auth.uid()` and current room
+  membership, so a direct PostgREST or Storage call obeys exactly what the app
+  obeys. `owner_id` holds no grant at all, and `storage_path` is excluded from the
+  response column list. Abuse controls run in cost order: fixed-window rate limits
+  (`rate_limits` table, written by `rate_limit_take`), a fail-open quota pre-check
+  that refuses an over-budget upload before the bytes are written, and the
+  `study_resources_quota_guard` trigger that re-decides inside the inserting
+  transaction so concurrent uploads cannot race past a quota.
+- **Invitations and the roster**: `lib/invitations/` addresses each invitation to
+  one student's alias — there is no token, link or invite URL, so nothing can be
+  forwarded or enumerated, and every transition re-derives `auth.uid()` inside a
+  `SECURITY DEFINER` RPC (`0007`). The table is read-only for clients (no write
+  grant), expiry is evaluated at read time (`410`, never a stored state), at most
+  one pending invitation per (room, invitee) is allowed by a partial unique index,
+  and acceptance seats through the same row-locked capacity code as `join_room`
+  with a private gate no client can execute. The roster reads through the
+  membership-checked `room_roster` RPC — `room_members` visibility is unchanged —
+  and annotates rows with live presence from the PR 06 channel.
+- **Member safety**: `lib/moderation/` reports, blocks, mutes, removals and
+  room-moderator appointment through alias-addressed SECURITY DEFINER RPCs
+  (`0009`) with no `INSERT`/`UPDATE` grant on the audit tables — the reporter is
+  pinned to `auth.uid()` inside the RPC and has no column grant, so no payload
+  can carry it; blocks are private to the blocker and filter that user's chat
+  through one clause on the `room_messages` SELECT policy (history and live
+  arrival alike); mutes are re-checked by the insert policy, so a direct
+  PostgREST write cannot bypass them. There is no global admin role: every
+  right is scoped to one room.
+- **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
+  } }`, built by `lib/api/responses.ts`.
+
+**Layout note:** the original brief assumed a `src/` tree (`src/lib/...`). This
+repository keeps the starter's root-level `app/`, `lib/` and `components/`, so those
+modules live at `lib/validation/`, `lib/rooms/`, `lib/profiles/` and `lib/api/`
+instead of `src/lib/...`. Route and test paths are otherwise unchanged.
+
+For the full directory map, data model (14 tables) and where decisions live, read
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+<a name="security"></a>
+
+## 🔐 Security
+
+- **Server-side auth gates**: pages are session-gated (middleware redirect for
+  browsers, JSON `401` for APIs); every room endpoint re-checks membership, and a
+  non-member gets the same `404` as a missing room (`lib/rooms/access.ts`).
+- **The database is the authority**: all 14 tables are RLS-enabled and granted
+  column by column (`auto_expose_new_tables = false`); privileged writes go through
+  `SECURITY DEFINER` RPCs; there is no `USING (true)` policy anywhere, and identity
+  is never accepted as a request parameter.
+- **Private file storage**: the `study-resources` bucket is `public = false`;
+  downloads are 300-second signed URLs issued only after the server re-checks
+  access; content types come from magic-byte sniffing; uploads are limited by
+  per-user and per-room quotas plus fixed-window rate limits, and failed writes are
+  swept by an orphan cleanup.
+- **Chat and moderation privacy**: chat is append-only; blocks filter at RLS
+  delivery; mutes are re-checked by the insert policy; `reporter_id` has no
+  `SELECT` grant, so no payload can leak who filed a report.
+- **No secrets at runtime**: no service-role key exists in application code, CI runs
+  with `permissions: contents: read` and zero repository secrets, and `.env.local`
+  is gitignored.
+- **Honest failures**: one error envelope, stable error codes, no stack traces in
+  responses.
+
+Read the threat model, security coverage and known limitations in
+[`docs/SECURITY.md`](docs/SECURITY.md). To report a vulnerability, follow
+[`SECURITY.md`](SECURITY.md) — please do not open a public issue.
+
+<a name="technology"></a>
+
+## 🛠️ Technology
+
+| Layer | Choice |
+| --- | --- |
+| Framework | [Next.js](https://nextjs.org) 16.3.8 — App Router, `cacheComponents`, Proxy |
+| Language | [TypeScript](https://www.typescriptlang.org) 5.9.3 (strict) |
+| Backend | [Supabase](https://supabase.com) — Auth, Postgres + RLS, Storage, Realtime; pinned CLI 2.119.0 for the local stack |
+| Validation | [Zod](https://zod.dev) 4.6.5, mirroring the database CHECK constraints |
+| Styling | [Tailwind CSS](https://tailwindcss.com) 4.3.3 + [shadcn/ui](https://ui.shadcn.com/) on Radix UI |
+| Tests | [Vitest](https://vitest.dev) 5.0.3 (unit + integration), [Playwright](https://playwright.dev) 1.63 (e2e), Testing Library |
+| Linting | ESLint 9 flat config via `eslint-config-next` 16.3.8 |
+
+### Pinned dependency versions
 
 All dependencies are pinned to exact versions (no `^`, `~` or `latest`) in `package.json`.
 
@@ -43,7 +320,7 @@ approved Supabase starter resolves to; keep this pin and do not downgrade to 16.
 the same release as `next`). It ships a native flat config, which `eslint.config.mjs`
 spreads directly — `FlatCompat`/`@eslint/eslintrc` is no longer used.
 
-## Tailwind CSS 4
+### Tailwind CSS 4
 
 Styling runs on **Tailwind CSS 4.3.3** with `@tailwindcss/postcss` (PostCSS plugin).
 The migration replaced the v3 trio (`tailwindcss` + `autoprefixer` + `tailwind.config.ts`):
@@ -59,7 +336,7 @@ The migration replaced the v3 trio (`tailwindcss` + `autoprefixer` + `tailwind.c
   `outline-none` → `outline-hidden`, `bg-gradient-*` → `bg-linear-*`, and the removed
   `origin-[--var]` shorthand → `origin-[var(--var)]`.
 
-## npm audit
+### npm audit
 
 `npm audit --omit=dev` (production dependencies): **0 vulnerabilities**.
 
@@ -79,7 +356,12 @@ rejected. Nothing is suppressed and `--force` / `--legacy-peer-deps` are not use
 Re-check `npm audit` on every dependency update: the count fell from 7 to 5 with the
 Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `braces` path).
 
-## Testing
+<a name="testing"></a>
+
+## 🧪 Testing
+
+Current suite: **778 unit** (60 files), **265 integration** (15 files), **38 e2e**
+(11 specs).
 
 - `npm test` (alias `npm run test:unit`) runs `vitest run` over `tests/unit/**` in the
   Node environment. It never contacts Supabase and passes without a local stack running.
@@ -133,7 +415,78 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node version pinned in `.nvmrc`, and the workflow is `permissions: contents: read`
   with no repository secrets.
 
-## Local Supabase
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the exact commands to run before you
+open a pull request.
+
+<a name="roadmap"></a>
+
+## 🗺️ Roadmap
+
+| Status | PRs |
+| --- | --- |
+| ✅ Merged | #1–#10 — chat, realtime, focus sessions & goals, room discovery, resources, presence, invitations & roster, room management, member safety, resource security |
+| ⏳ Pending | #11–#21 — notifications, AI study assistance, richer discovery, production hardening, mobile & accessibility, profile/settings, coverage gates |
+
+Details, order and acceptance criteria:
+[`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) ·
+[`docs/milestones.md`](docs/milestones.md) ·
+[project wiki](https://github.com/chanukyareddygopala07/sdyroom/wiki)
+
+<a name="getting-started"></a>
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Node.js 24** (the version pinned in `.nvmrc`) and npm
+- **Docker** — the local Supabase stack runs in containers (several GB of disk)
+- `npx playwright install chromium` before running e2e tests
+
+### Run locally
+
+```bash
+git clone https://github.com/chanukyareddygopala07/sdyroom.git
+cd sdyroom
+npm ci
+```
+
+1. Copy `.env.example` to `.env.local` and fill it from the local stack
+   (`npx supabase status -o env`) — only two public, browser-safe values:
+
+   ```env
+   NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<local publishable key>
+   ```
+
+2. Start the local stack and apply every migration:
+
+   ```bash
+   npx supabase start
+   npx supabase db reset
+   ```
+
+3. Start the app:
+
+   ```bash
+   npm run dev
+   ```
+
+   The app runs on [localhost:3000](http://localhost:3000/).
+
+### Scripts
+
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Next.js dev server |
+| `npm run build` | Production build |
+| `npm start` | Serve the production build |
+| `npm run lint` | ESLint (flat config) |
+| `npx tsc --noEmit` | Type check (what CI runs; there is no `typecheck` script) |
+| `npm test` / `npm run test:unit` | Unit suite (no network, no stack needed) |
+| `npm run test:integration` | Integration suite (needs the local stack + `db reset`) |
+| `npm run test:e2e` | Playwright e2e (needs the local stack + Chromium) |
+
+### Local Supabase
 
 The database foundation runs entirely locally through the pinned CLI
 (`npx supabase start`), with Postgres on port **54322** — never the Homebrew server on
@@ -142,7 +495,25 @@ policies, the private `study-resources` bucket and its storage policies, the
 `create_room` RPC, how owner-membership atomicity is enforced, and the verification
 commands.
 
-## Application
+<a name="documentation"></a>
+
+## 📚 Documentation
+
+| Document | What it answers |
+| --- | --- |
+| [Project wiki](https://github.com/chanukyareddygopala07/sdyroom/wiki) | Product vision, positioning and feature overview |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the layers fit together, directory map, data model |
+| [docs/API_CONTRACTS.md](docs/API_CONTRACTS.md) | What every endpoint accepts and returns |
+| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, security coverage, known limitations |
+| [docs/local-supabase.md](docs/local-supabase.md) | Local database: schema, grants, policies, verification |
+| [docs/PR_ROADMAP.md](docs/PR_ROADMAP.md) · [docs/milestones.md](docs/milestones.md) | What shipped, what is next, in what order |
+| [docs/prs/](docs/prs/) | Per-PR specifications and reconciliation notes |
+| [tests/integration/README.md](tests/integration/README.md) · [tests/e2e/README.md](tests/e2e/README.md) | How the suites run and what they prove |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development workflow and pull-request checklist |
+| [SECURITY.md](SECURITY.md) | How to report a vulnerability |
+| [docs/images/README.md](docs/images/README.md) | Screenshot and demo asset conventions |
+
+## 🧭 Application & API
 
 SdyRoom is a minimal working application on top of this starter: sign up, pick a
 unique study alias once, then discover public rooms and create your own.
@@ -184,11 +555,18 @@ unique study alias once, then discover public rooms and create your own.
 | `DELETE /api/blocks/[alias]` | signed in | `200 { removed }` (idempotent); unblocking restores the filtered chat and re-enables invitations |
 | `PATCH /api/rooms/[id]` | room owner | Partial edit of name / shared goal / exam track / subject / language / capacity / status → `200 { room }` (the stored row); `403 not_owner`, `404 not_found` for a non-member *and* a missing room, `409 capacity_below_membership`, `400 invalid_request` for an empty body / `validation` for a bad value or an unknown key such as `owner_id`, `401` |
 | `DELETE /api/rooms/[id]` | room owner | Sweeps `rooms/{id}/**` out of the bucket first, then cascades every dependent row → `200 { deleted: true }`; `403 not_owner`, `404 not_found` for a non-member, a missing room, or a repeat delete, `500 cleanup_failed` / `delete_failed` (room intact, retry converges) |
-| `/resources` | signed in | The personal library: upload, search and filter your own files, open them through a short-lived signed URL, delete them |
-| `GET /api/resources` | signed in | `?scope=personal` (default) or `?room_id=<uuid>`, plus `q` / `subject` / `chapter` / `limit` / `offset`; `400` for both `scope` and `room_id` or a bad value, `404` for a room you have left |
-| `POST /api/resources` | signed in | multipart upload → `201`; `400` `validation` / `invalid_request` / `invalid_filename` / `empty_file` / `malformed_file`, `413 file_too_large`, `415 unsupported_file_type`, `404` for a room you are not in, `500` `storage_upload_failed` / `metadata_failed` |
-| `GET /api/resources/[id]/download` | signed in, can read it | `200 { url, expires_in: 300, resource_id }` — authorization is re-checked on every call; `404 not_found` for a missing, deleted or foreign file |
-| `DELETE /api/resources/[id]` | uploader | `200 { deleted: true }`; object removed before the row; `404 not_found` for anyone else's file, `500 cleanup_failed` / `delete_failed` |
+| `/resources` | signed in | The personal library: upload, search and filter your own files, open them through a short-lived signed URL, see your storage quota, delete them |
+| `GET /api/resources` | signed in | `?scope=personal` (default) or `?room_id=<uuid>`, plus `q` / `subject` / `chapter` / `limit` / `offset`; `200` includes `quota` (`{ scope, used_bytes, limit_bytes, user_used_bytes, user_limit_bytes }`) for the listed scope; `400` for both `scope` and `room_id` or a bad value, `404` for a room you have left |
+| `POST /api/resources` | signed in | multipart upload → `201`; `400` `validation` / `invalid_request` / `invalid_filename` / `empty_file` / `malformed_file`, `409 quota_exceeded` (1 GiB per user / 500 MiB per room), `413 file_too_large`, `415 unsupported_file_type`, `429 rate_limited` (user + target upload windows, `Retry-After`), `404` for a room you are not in, `500` `storage_upload_failed` / `metadata_failed` |
+| `GET /api/resources/[id]/download` | signed in, can read it | `200 { url, expires_in: 300, resource_id }` — authorization is re-checked on every call; `404 not_found` for a missing, deleted or foreign file, `429 rate_limited` |
+| `DELETE /api/resources/[id]` | uploader | `200 { deleted: true }`; object removed before the row; `404 not_found` for anyone else's file, `429 rate_limited`, `500 cleanup_failed` / `delete_failed` |
+| `POST /api/resources/cleanup` | signed in (room scope: member) | Sweep one scope for orphaned bytes left behind by failed writes: `200 { removed_objects, removed_rows, scope, room_id }`; objects/rows younger than 60 s are skipped in both directions; `400` validation, `404` for a room you are not in, `429 rate_limited` |
+
+Endpoints that consume scarce resources — reports, blocks, mutes, invitation
+creation and the file endpoints above — additionally answer `429 rate_limited`
+with a `Retry-After` header once their fixed-window budget is spent;
+[`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) holds the authoritative per-endpoint
+contracts.
 
 Both membership endpoints take an empty body on purpose: the user is read from the
 session, and a body that carries a `user_id` is rejected with `400 invalid_request`
@@ -222,304 +600,22 @@ uploader's alone. `docs/ARCHITECTURE.md` is the map of how the layers fit
 together, `docs/API_CONTRACTS.md` holds the endpoint contracts and
 `docs/SECURITY.md` the threat model behind them.
 
-How the pieces fit together:
+<a name="contributing"></a>
 
-- **Session**: `proxy.ts` → `lib/supabase/proxy.ts#updateSession` refreshes cookies
-  and sends unauthenticated visitors (everything except `/`, `/auth/*` and `/api/*`)
-  to `/auth/login`. API routes are exempt on purpose so a `fetch` client gets the
-  documented JSON `401` instead of an HTML redirect. Each session-gated page re-checks the session and, for rooms, the
-  profile row; they export `instant = false` because the project runs with
-  `cacheComponents` and these routes must render per request.
-- **Validation**: `lib/validation/` (Zod) mirrors the CHECK constraints in
-  `supabase/migrations/0001_init.sql`, so bad input is rejected in the browser, at
-  the API boundary and again in the database.
-- **Database access**: `lib/profiles/queries.ts` and `lib/rooms/` — public rooms are
-  read with an explicit column list and mapped through `toPublicRoom()`, so
-  `owner_id` and any future private column can never reach a response. Rooms are
-  only ever created through the `create_room` RPC, and membership only through
-  `join_room` / `leave_room`: the owner (or the caller) is always taken from
-  `auth.uid()` and never accepted from the client, and the seat check shares a row
-  lock with the insert so racing students cannot exceed `capacity`. Occupancy is an
-  aggregate over public rooms only (`public_room_member_counts`), so no participant
-  identity or private-room count is ever disclosed.
-- **Focus sessions**: `lib/focus/` reads through `focus_session_state` and writes
-  through `start` / `pause` / `resume` / `end`, all owner-checked inside the
-  database. A partial unique index allows at most one active session per room, so a
-  concurrent race resolves to `already_active` instead of a second row, and
-  `toFocusSession()` re-validates every payload (paused ⇔ `paused_at`, finished ⇔
-  `ended_at`) before it reaches a client. The workspace page subscribes to realtime
-  changes on `focus_sessions`, polls as a fallback and re-reads the same
-  `getFocusWorkspace` the server rendered with, so a reconnect can never restart or
-  rewind a timer.
-- **Personal goals**: `lib/goals/` addresses only the caller's own rows; the partial
-  unique index on `(user_id, room_id, lower(title)) where status = 'active'` yields
-  `409 duplicate_goal`, the title frees up on completion, and a trigger owns
-  `completed_at` / `updated_at`.
-- **Room chat**: `lib/chat/` seeds history from the workspace page and appends
-  through `POST /api/rooms/[id]/messages`; `room_messages` is append-only (only
-  `SELECT`/`INSERT` are granted), the sender is pinned to `auth.uid()` by RLS and
-  never returned as an id — the API maps it onto the viewer-relative `is_own` — and
-  `seq` gives a stable total order for `before=` cursor pagination. Rows reach
-  members over `supabase_realtime`, with RLS applied at delivery, and the client
-  deduplicates by id because a send can be confirmed by both the POST response and
-  its own event.
-- **Study resources**: `lib/resources/` validates the file (magic bytes, 20 MiB
-  ceiling, filename shape, unknown multipart parts rejected outright), builds the
-  storage key from server-generated UUIDs only, and writes the object *before* the
-  metadata row — a failed insert rolls the object back, so no orphan is advertised.
-  The same scope is enforced twice, independently: table RLS for the metadata and
-  storage RLS for the bytes, both derived from `auth.uid()` and current room
-  membership, so a direct PostgREST or Storage call obeys exactly what the app
-  obeys. `owner_id` holds no grant at all, and `storage_path` is excluded from the
-  response column list.
-- **Invitations and the roster**: `lib/invitations/` addresses each invitation to
-  one student's alias — there is no token, link or invite URL, so nothing can be
-  forwarded or enumerated, and every transition re-derives `auth.uid()` inside a
-  `SECURITY DEFINER` RPC (`0007`). The table is read-only for clients (no write
-  grant), expiry is evaluated at read time (`410`, never a stored state), at most
-  one pending invitation per (room, invitee) is allowed by a partial unique index,
-  and acceptance seats through the same row-locked capacity code as `join_room`
-  with a private gate no client can execute. The roster reads through the
-  membership-checked `room_roster` RPC — `room_members` visibility is unchanged —
-  and annotates rows with live presence from the PR 06 channel.
-- **Member safety**: `lib/moderation/` reports, blocks, mutes, removals and
-  room-moderator appointment through alias-addressed SECURITY DEFINER RPCs
-  (`0009`) with no `INSERT`/`UPDATE` grant on the audit tables — the reporter is
-  pinned to `auth.uid()` inside the RPC and has no column grant, so no payload
-  can carry it; blocks are private to the blocker and filter that user's chat
-  through one clause on the `room_messages` SELECT policy (history and live
-  arrival alike); mutes are re-checked by the insert policy, so a direct
-  PostgREST write cannot bypass them. There is no global admin role: every
-  right is scoped to one room.
-- **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
-  } }`, built by `lib/api/responses.ts`.
+## 🤝 Contributing
 
-  ##Built With
-  ## 🏗️ Architecture
+Contributions are welcome. Start with
+[`CONTRIBUTING.md`](CONTRIBUTING.md) — it covers the environment setup, the exact
+gates CI runs (`npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run build`, plus
+the integration and e2e suites), and the pull-request checklist.
 
-SdyRoom follows a **Next.js + Supabase architecture** with authorization enforced at both the application and database layers.
+- Bugs and feature requests: [open an issue](https://github.com/chanukyareddygopala07/sdyroom/issues)
+- Vulnerabilities: follow [`SECURITY.md`](SECURITY.md) instead of a public issue
 
-<div align="center">
+<a name="license"></a>
 
-                         ┌─────────────────────────┐
-                         │        SdyRoom          │
-                         │      Web Client         │
-                         │  Next.js + React + TS    │
-                         └────────────┬────────────┘
-                                      │
-                         HTTPS / Server Actions
-                                      │
-                                      ▼
-                    ┌──────────────────────────────┐
-                    │       Next.js Application    │
-                    │                              │
-                    │  App Router                  │
-                    │  Server Components           │
-                    │  API Routes                  │
-                    │  Validation / Auth Checks    │
-                    └──────────────┬───────────────┘
-                                   │
-                    ┌──────────────┼──────────────┐
-                    │              │              │
-                    ▼              ▼              ▼
-             ┌───────────┐  ┌────────────┐  ┌──────────────┐
-             │ Supabase  │  │ PostgreSQL │  │ Supabase     │
-             │   Auth    │  │ Database   │  │ Storage      │
-             └───────────┘  └─────┬──────┘  └──────────────┘
-                                   │
-                                   ▼
-                         ┌──────────────────┐
-                         │ Row Level        │
-                         │ Security (RLS)   │
-                         └────────┬─────────┘
-                                  │
-             ┌────────────────────┼────────────────────┐
-             ▼                    ▼                    ▼
-       ┌───────────┐       ┌────────────┐       ┌────────────┐
-       │  Profiles │       │   Rooms    │       │ Membership │
-       └───────────┘       └────────────┘       └────────────┘
-                                  │
-                                  ▼
-                         ┌──────────────────┐
-                         │ Study Resources │
-                         │ & Sessions      │
-                         └──────────────────┘
+## 📜 License
 
-                         ───────────────────
-                         Quality & Delivery
-                         ───────────────────
+Licensed under the [MIT License](LICENSE) — see the license file for details.
 
-              GitHub Actions → Tests → Lint → Typecheck
-                                      │
-                                      ▼
-                                  Production
-                                      │
-                                      ▼
-                                   Vercel
-
-</div>
-
-### Request Flow
-
-```text
-User
- │
- ▼
-Next.js Client
- │
- ▼
-Next.js Application
- │
- ├── Authentication
- ├── Input Validation
- └── API / Server Logic
- │
- ▼
-Supabase
- │
- ├── Auth
- ├── PostgreSQL
- └── Storage
- │
- ▼
-PostgreSQL RLS
- │
- ├── Profiles
- ├── Rooms
- ├── Memberships
- └── Resources
-```
-
-### Security Boundary
-
-Authorization is not handled exclusively by the frontend.
-
-SdyRoom uses **PostgreSQL Row Level Security (RLS)** to enforce access policies at the database layer. This protects private rooms, memberships, and resources even when requests bypass the normal UI flow.
-
-### Application Layers
-
-| Layer                | Responsibility                                   |
-| -------------------- | ------------------------------------------------ |
-| **Next.js UI**       | User experience and client interaction           |
-| **Server Layer**     | Authentication, validation and application logic |
-| **Supabase Auth**    | Identity and session management                  |
-| **PostgreSQL**       | Persistent application data                      |
-| **RLS**              | Database-level authorization                     |
-| **Supabase Storage** | Secure study-resource storage                    |
-| **GitHub Actions**   | Automated testing and CI                         |
-| **Vercel**           | Production deployment                            |
-
-
-### Layout note
-
-The original brief assumed a `src/` tree (`src/lib/...`). This repository keeps the
-starter's root-level `app/`, `lib/` and `components/`, so those modules live at
-`lib/validation/`, `lib/rooms/`, `lib/profiles/` and `lib/api/` instead of
-`src/lib/...`. Route and test paths are otherwise unchanged.
-
-## Features
-
-- Works across the entire [Next.js](https://nextjs.org) stack
-  - App Router
-  - Pages Router
-  - Proxy
-  - Client
-  - Server
-  - It just works!
-- supabase-ssr. A package to configure Supabase Auth to use cookies
-- Password-based authentication block installed via the [Supabase UI Library](https://supabase.com/ui/docs/nextjs/password-based-auth)
-- Styling with [Tailwind CSS](https://tailwindcss.com)
-- Components with [shadcn/ui](https://ui.shadcn.com/)
-- Optional deployment with [Supabase Vercel Integration and Vercel deploy](#deploy-your-own)
-  - Environment variables automatically assigned to Vercel project
-
-## Demo
-
-You can view a fully working demo at [demo-nextjs-with-supabase.vercel.app](https://demo-nextjs-with-supabase.vercel.app/).
-
-## Deploy to Vercel
-
-Vercel deployment will guide you through creating a Supabase account and project.
-
-After installation of the Supabase integration, all relevant environment variables will be assigned to the project so the deployment is fully functioning.
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&project-name=nextjs-with-supabase&repository-name=nextjs-with-supabase&demo-title=nextjs-with-supabase&demo-description=This+starter+configures+Supabase+Auth+to+use+cookies%2C+making+the+user%27s+session+available+throughout+the+entire+Next.js+app+-+Client+Components%2C+Server+Components%2C+Route+Handlers%2C+Server+Actions+and+Middleware.&demo-url=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2F&external-id=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&demo-image=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2Fopengraph-image.png)
-
-The above will also clone the Starter kit to your GitHub, you can clone that locally and develop locally.
-
-If you wish to just develop locally and not deploy to Vercel, [follow the steps below](#clone-and-run-locally).
-
-## Clone and run locally
-
-1. You'll first need a Supabase project which can be made [via the Supabase dashboard](https://database.new)
-
-2. Create a Next.js app using the Supabase Starter template npx command
-
-   ```bash
-   npx create-next-app --example with-supabase with-supabase-app
-   ```
-
-   ```bash
-   yarn create next-app --example with-supabase with-supabase-app
-   ```
-
-   ```bash
-   pnpm create next-app --example with-supabase with-supabase-app
-   ```
-
-3. Use `cd` to change into the app's directory
-
-   ```bash
-   cd with-supabase-app
-   ```
-
-4. Rename `.env.example` to `.env.local` and update the following:
-
-  ```env
-  NEXT_PUBLIC_SUPABASE_URL=[INSERT SUPABASE PROJECT URL]
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=[INSERT SUPABASE PROJECT API PUBLISHABLE OR ANON KEY]
-  ```
-  > [!NOTE]
-  > This example uses `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, which refers to Supabase's new **publishable** key format.
-  > Both legacy **anon** keys and new **publishable** keys can be used with this variable name during the transition period. Supabase's dashboard may show `NEXT_PUBLIC_SUPABASE_ANON_KEY`; its value can be used in this example.
-  > See the [full announcement](https://github.com/orgs/supabase/discussions/29260) for more information.
-
-  Both `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` can be found in [your Supabase project's API settings](https://supabase.com/dashboard/project/_?showConnect=true)
-
-5. You can now run the Next.js local development server:
-
-   ```bash
-   npm run dev
-   ```
-
-   The starter kit should now be running on [localhost:3000](http://localhost:3000/).
-
-6. This template comes with the default shadcn/ui style initialized. If you instead want other ui.shadcn styles, delete `components.json` and [re-install shadcn/ui](https://ui.shadcn.com/docs/installation/next)
-
-> Check out [the docs for Local Development](https://supabase.com/docs/guides/getting-started/local-development) to also run Supabase locally.
-
-## Feedback and issues
-
-Please file feedback and issues over on the [Supabase GitHub org](https://github.com/supabase/supabase/issues/new/choose).
-
-## More Supabase examples
-
-- [Next.js Subscription Payments Starter](https://github.com/vercel/nextjs-subscription-payments)
-- [Cookie-based Auth and the Next.js 13 App Router (free course)](https://youtube.com/playlist?list=PL5S4mPUpp4OtMhpnp93EFSo42iQ40XjbF)
-- [Supabase Auth and the Next.js App Router](https://github.com/supabase/supabase/tree/master/examples/auth/nextjs)
-- # SdyRoom
-
-### Study together. Stay accountable. Achieve more.
-
-Privacy-first virtual study rooms for students preparing for
-competitive and university examinations.
-
-[![CI](https://github.com/chanukyareddygopala07/sdyroom/actions/workflows/ci.yml/badge.svg)](https://github.com/chanukyareddygopala07/sdyroom/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/chanukyareddygopala07/sdyroom/graph/badge.svg)](https://codecov.io/gh/chanukyareddygopala07/sdyroom)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
-![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3FCF8E?logo=supabase)
-![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-06B6D4?logo=tailwindcss)
-
-
+Built from the Supabase Next.js starter kit.

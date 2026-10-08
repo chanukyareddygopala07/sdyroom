@@ -45,7 +45,7 @@ Two rules define the codebase:
 | `lib/rooms/access.ts` | The shared membership/ownership gates (`requireRoomMembership`, `requireRoomOwner`) that give non-members the same `404` as a missing room. |
 | `lib/api/responses.ts` | The one error envelope: `{ error: { code, message, issues? } }`. |
 | `lib/supabase/` | `proxy.ts` (session refresh + page redirects), `server.ts` (cookie-scoped server client), `client.ts` (browser client). No service-role key exists in the repo. |
-| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0009` are append-only; existing files are never edited. |
+| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0010` are append-only; existing files are never edited. |
 | `tests/unit` | Vitest, no network: validators, queries against fake builders, every route's status matrix, component behaviour. |
 | `tests/integration` | Vitest against the real local stack with real auth users: RLS/grant probes, RPC races, HTTP-level handler tests. Never uses a service-role key (SQL fixtures go through `docker exec psql`). |
 | `tests/e2e` | Playwright + Chromium driving the real `next dev` app: two-browser flows, WebSocket frame capture/replay, teardown scoped to a per-run user id. |
@@ -53,7 +53,7 @@ Two rules define the codebase:
 
 ## Data model
 
-Thirteen tables, all with RLS enabled, all granted explicitly column by column
+Fourteen tables, all with RLS enabled, all granted explicitly column by column
 (`auto_expose_new_tables = false`):
 
 | Table | Owns |
@@ -71,6 +71,7 @@ Thirteen tables, all with RLS enabled, all granted explicitly column by column
 | `room_mutes` | The active mute per (room, member) with `muted_until`; `SELECT`-only for members, RPC-only writes, and the source of the `room_messages` insert-policy check. |
 | `room_moderators` | Aliases appointed by the room owner — the *only* moderator concept; there is no global role. |
 | `user_blocks` | The blocker's own rows (`blocker_id = auth.uid()` own-rows policy); RPC-only writes; read by the chat filter and the invitation accept. |
+| `rate_limits` | Fixed-window counters for the abuse controls (`0010`). The table carries no grant at all and RLS carries zero policies; the only door in is the `rate_limit_take` RPC (SECURITY DEFINER, executable by `authenticated` only). |
 
 Membership flows (join, leave, invitation acceptance) all funnel through
 `SECURITY DEFINER` RPCs because an RLS `WITH CHECK` cannot take the row lock
