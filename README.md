@@ -294,6 +294,68 @@ How the pieces fit together:
 - **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
   } }`, built by `lib/api/responses.ts`.
 
+  ##Built With
+  ## 🏗️ Architecture
+
+SdyRoom follows a **Next.js + Supabase architecture** with authorization enforced at both the application and database layers.
+
+<div align="center">
+
+<img src="docs/images/architecture.png" alt="SdyRoom system architecture" width="950" />
+
+</div>
+
+### Request Flow
+
+```text
+User
+ │
+ ▼
+Next.js Client
+ │
+ ▼
+Next.js Application
+ │
+ ├── Authentication
+ ├── Input Validation
+ └── API / Server Logic
+ │
+ ▼
+Supabase
+ │
+ ├── Auth
+ ├── PostgreSQL
+ └── Storage
+ │
+ ▼
+PostgreSQL RLS
+ │
+ ├── Profiles
+ ├── Rooms
+ ├── Memberships
+ └── Resources
+```
+
+### Security Boundary
+
+Authorization is not handled exclusively by the frontend.
+
+SdyRoom uses **PostgreSQL Row Level Security (RLS)** to enforce access policies at the database layer. This protects private rooms, memberships, and resources even when requests bypass the normal UI flow.
+
+### Application Layers
+
+| Layer                | Responsibility                                   |
+| -------------------- | ------------------------------------------------ |
+| **Next.js UI**       | User experience and client interaction           |
+| **Server Layer**     | Authentication, validation and application logic |
+| **Supabase Auth**    | Identity and session management                  |
+| **PostgreSQL**       | Persistent application data                      |
+| **RLS**              | Database-level authorization                     |
+| **Supabase Storage** | Secure study-resource storage                    |
+| **GitHub Actions**   | Automated testing and CI                         |
+| **Vercel**           | Production deployment                            |
+
+
 ### Layout note
 
 The original brief assumed a `src/` tree (`src/lib/...`). This repository keeps the
