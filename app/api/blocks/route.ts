@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { errorResponse, readJsonBody, validationResponse } from "@/lib/api/responses";
+import { rateLimitedResponse } from "@/lib/rate-limit/check";
+import { blockSpec } from "@/lib/rate-limit/keys";
 import { ModerationError } from "@/lib/moderation/errors";
 import { createBlock, listBlocks } from "@/lib/moderation/queries";
 import { createClient } from "@/lib/supabase/server";
@@ -60,6 +62,7 @@ export async function GET() {
  * | 401 | `{ "error": { "code": "unauthenticated" } }` |
  * | 404 | `{ "error": { "code": "not_found" } }` — no student studies under that alias |
  * | 409 | `{ "error": { "code": "self_block" } }` |
+ * | 429 | `{ "error": { "code": "rate_limited" } }` |
  * | 500 | `{ "error": { "code": "blocks_failed" } }` |
  */
 export async function POST(request: NextRequest) {
@@ -68,6 +71,15 @@ export async function POST(request: NextRequest) {
 
   if (!data?.claims) {
     return errorResponse("unauthenticated", "Sign in to block a student.", 401);
+  }
+
+  const limited = await rateLimitedResponse(
+    supabase,
+    blockSpec(data.claims.sub),
+    "Too many block changes — wait a while and try again.",
+  );
+  if (limited) {
+    return limited;
   }
 
   const parsedBody = await readJsonBody(request);

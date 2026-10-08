@@ -221,11 +221,20 @@ export async function removeRoomStorageObjects(
  * independent enforcement of the same decision. An expired or unauthorized
  * token reaches the storage service as a 403 at fetch time, never as a
  * permanent link.
+ *
+ * A `download` query parameter is appended with the caller's original file
+ * name so the storage service answers with
+ * `Content-Disposition: attachment` — files in this app are downloaded, never
+ * rendered inline from the storage origin (which serves them without
+ * `X-Content-Type-Options`). The parameter is added after signing, exactly as
+ * the storage client itself does, and is encoded once here because the
+ * client's own `encodeURI` pass would double-encode a percent sign.
  */
 export async function createResourceDownloadUrl(
   client: SupabaseClient,
   storagePath: string,
   expiresInSeconds: number = DOWNLOAD_TTL_SECONDS,
+  downloadName?: string,
 ): Promise<{ url: string; expires_in: number }> {
   const { data, error } = await client.storage
     .from(RESOURCE_BUCKET)
@@ -239,8 +248,11 @@ export async function createResourceDownloadUrl(
     );
   }
 
+  const url = absoluteUrl(data.signedUrl);
   return {
-    url: absoluteUrl(data.signedUrl),
+    url: downloadName
+      ? `${url}&download=${encodeURIComponent(downloadName)}`
+      : url,
     expires_in: expiresInSeconds,
   };
 }

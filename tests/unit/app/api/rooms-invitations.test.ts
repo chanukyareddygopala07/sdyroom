@@ -35,6 +35,8 @@ vi.mock("@/lib/invitations/queries", async (importOriginal) => ({
   revokeInvitation,
 }));
 
+const rpc = vi.fn(async () => ({ data: true }));
+
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const INVITATION_ID = "22222222-2222-4222-8222-222222222222";
 
@@ -81,8 +83,10 @@ function revoke(id: string = ROOM_ID, invitationId: string = INVITATION_ID) {
 
 describe("invitations routes", () => {
   beforeEach(() => {
+    rpc.mockReset();
+    rpc.mockResolvedValue({ data: true });
     getClaims.mockResolvedValue({ data: { claims: { sub: "user-1" } } });
-    createClient.mockResolvedValue({ auth: { getClaims } });
+    createClient.mockResolvedValue({ auth: { getClaims }, rpc });
     requireRoomOwner.mockResolvedValue(undefined);
     createInvitation.mockResolvedValue(INVITATION);
     listRoomInvitations.mockResolvedValue([INVITATION]);
@@ -113,6 +117,26 @@ describe("invitations routes", () => {
       expect(response.status).toBe(400);
       expect((await response.json()).error.code).toBe("validation");
       expect(createInvitation).not.toHaveBeenCalled();
+    });
+
+    it("answers an over-ceiling inviter with 429 before reading the body", async () => {
+      rpc.mockResolvedValueOnce({ data: false });
+      const { request, context } = post(
+        JSON.stringify({ invitee_alias: "studybuddy" }),
+      );
+
+      const response = await POST(request, context);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBe("3600");
+      expect((await response.json()).error.code).toBe("rate_limited");
+      expect(rpc).toHaveBeenCalledWith("rate_limit_take", {
+        p_key: `invite:${ROOM_ID}:user-1`,
+        p_max: 10,
+        p_window: "3600 seconds",
+      });
+      expect(createInvitation).not.toHaveBeenCalled();
+      expect(requireRoomOwner).not.toHaveBeenCalled();
     });
 
     it("rejects a body that is not JSON", async () => {

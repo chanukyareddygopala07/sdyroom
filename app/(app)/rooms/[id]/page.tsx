@@ -23,6 +23,7 @@ import {
   listBlocks,
   listReports,
 } from "@/lib/moderation/queries";
+import { fetchResourceQuota } from "@/lib/resources/quota";
 import { listResources } from "@/lib/resources/queries";
 import { createClient } from "@/lib/supabase/server";
 import { MESSAGE_PAGE_SIZE_DEFAULT } from "@/lib/validation/chat";
@@ -82,7 +83,7 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
 
   // Membership is already proven by the workspace read above, so the library
   // query here is simply RLS applying room membership to the same viewer.
-  const [goals, { messages }, resources] = await Promise.all([
+  const [goals, { messages }, resources, quota] = await Promise.all([
     listGoals(supabase, parsedRoomId.data),
     listMessages(supabase, {
       roomId: parsedRoomId.data,
@@ -99,6 +100,14 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
       limit: RESOURCE_PAGE_SIZE_DEFAULT,
       offset: 0,
     }),
+    // Display-only, same reasoning as the personal library page: a quota
+    // read failure hides the usage line, it never fails the workspace.
+    fetchResourceQuota(supabase, parsedRoomId.data).catch(
+      (error: unknown) => {
+        console.error("[rooms/page] quota fetch failed:", error);
+        return null;
+      },
+    ),
   ]);
   const { room, member_count, viewer_role } = workspace;
 
@@ -270,6 +279,7 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
         key={`resources-${room.id}`}
         scope={{ kind: "room", roomId: room.id }}
         initialResources={resources.resources}
+        quota={quota}
         idPrefix={`room-${room.id}`}
         level={2}
         heading="Resources"

@@ -26,6 +26,8 @@ const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const RESOURCE = "44444444-4444-4444-8444-444444444444";
 const SIGNED = `https://storage.example.com/signed/${RESOURCE}`;
 
+const rpc = vi.fn(async () => ({ data: true }));
+
 function download(id: string = RESOURCE) {
   return {
     request: new NextRequest(
@@ -37,12 +39,15 @@ function download(id: string = RESOURCE) {
 
 describe("GET /api/resources/[id]/download", () => {
   beforeEach(() => {
+    rpc.mockReset();
+    rpc.mockResolvedValue({ data: true });
     getClaims.mockResolvedValue({ data: { claims: { sub: OWNER } } });
-    createClient.mockResolvedValue({ auth: { getClaims } });
+    createClient.mockResolvedValue({ auth: { getClaims }, rpc });
     findResourceLocator.mockResolvedValue({
       id: RESOURCE,
       room_id: null,
       storage_path: `personal/${OWNER}/${RESOURCE}.pdf`,
+      original_filename: "notes.pdf",
     });
     createResourceDownloadUrl.mockResolvedValue({
       url: SIGNED,
@@ -69,6 +74,23 @@ describe("GET /api/resources/[id]/download", () => {
 
     expect(response.status).toBe(400);
     expect((await response.json()).error.code).toBe("validation");
+  });
+
+  it("answers an over-ceiling caller with 429 before signing anything", async () => {
+    rpc.mockResolvedValueOnce({ data: false });
+
+    const { request, context } = download();
+    const response = await GET(request, context);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect((await response.json()).error.code).toBe("rate_limited");
+    expect(rpc).toHaveBeenCalledWith("rate_limit_take", {
+      p_key: `download:user:${OWNER}`,
+      p_max: 120,
+      p_window: "60 seconds",
+    });
+    expect(createResourceDownloadUrl).not.toHaveBeenCalled();
   });
 
   it("answers a resource the caller cannot see with the generic 404", async () => {
@@ -98,6 +120,8 @@ describe("GET /api/resources/[id]/download", () => {
     expect(createResourceDownloadUrl).toHaveBeenCalledWith(
       expect.anything(),
       `personal/${OWNER}/${RESOURCE}.pdf`,
+      DOWNLOAD_TTL_SECONDS,
+      "notes.pdf",
     );
   });
 

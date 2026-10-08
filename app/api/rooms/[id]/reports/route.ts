@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { errorResponse, readJsonBody, validationResponse } from "@/lib/api/responses";
+import { rateLimitedResponse } from "@/lib/rate-limit/check";
+import { reportSpec } from "@/lib/rate-limit/keys";
 import { ModerationError } from "@/lib/moderation/errors";
 import { createReport, listReports } from "@/lib/moderation/queries";
 import {
@@ -103,6 +105,7 @@ export async function GET(request: NextRequest, { params }: ReportsContext) {
  * | 401 | `{ "error": { "code": "unauthenticated" } }` |
  * | 404 | `{ "error": { "code": "not_found" } }` — missing room, non-member, or unknown subject alias |
  * | 409 | `{ "error": { "code": "self_report" } \| { "code": "invalid_subject" } }` |
+ * | 429 | `{ "error": { "code": "rate_limited" } }` |
  * | 500 | `{ "error": { "code": "report_failed" } }` |
  */
 export async function POST(request: NextRequest, { params }: ReportsContext) {
@@ -119,6 +122,15 @@ export async function POST(request: NextRequest, { params }: ReportsContext) {
     return errorResponse("validation", "That room id is not valid.", 400, [
       { path: "id", message: "Room id must be a UUID." },
     ]);
+  }
+
+  const limited = await rateLimitedResponse(
+    supabase,
+    reportSpec(parsedRoomId.data, data.claims.sub),
+    "Too many reports — wait a while and try again.",
+  );
+  if (limited) {
+    return limited;
   }
 
   const parsedBody = await readJsonBody(request);

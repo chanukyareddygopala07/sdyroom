@@ -41,6 +41,32 @@ vi.mock("@/lib/rooms/access", async (importOriginal) => ({
 
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 
+const quotaFixture = {
+  scope: "user",
+  used_bytes: 1_048_576,
+  limit_bytes: 1_073_741_824,
+  user_used_bytes: 1_048_576,
+  user_limit_bytes: 1_073_741_824,
+};
+
+/** The DB-backed helpers the route drives through `supabase.rpc`. */
+const rpc = vi.fn(async (fn: string): Promise<{ data: unknown; error?: { message: string } }> => {
+  if (fn === "rate_limit_take") return { data: true };
+  if (fn === "resource_quota_ok") return { data: true };
+  if (fn === "resource_quota") return { data: quotaFixture };
+  return { data: null, error: { message: `unexpected rpc: ${fn}` } };
+});
+
+function allowEverything() {
+  rpc.mockReset();
+  rpc.mockImplementation(async (fn: string) => {
+    if (fn === "rate_limit_take") return { data: true };
+    if (fn === "resource_quota_ok") return { data: true };
+    if (fn === "resource_quota") return { data: quotaFixture };
+    return { data: null, error: { message: `unexpected rpc: ${fn}` } };
+  });
+}
+
 const storedResource = {
   id: "44444444-4444-4444-8444-444444444444",
   title: "Rotational motion",
@@ -81,8 +107,9 @@ function uploadBody(
 
 describe("GET /api/resources", () => {
   beforeEach(() => {
+    allowEverything();
     getClaims.mockResolvedValue({ data: { claims: { sub: "user-1" } } });
-    createClient.mockResolvedValue({ auth: { getClaims } });
+    createClient.mockResolvedValue({ auth: { getClaims }, rpc });
     listResources.mockResolvedValue({
       resources: [storedResource],
       limit: 50,
@@ -112,6 +139,7 @@ describe("GET /api/resources", () => {
       limit: 50,
       offset: 0,
       has_more: false,
+      quota: quotaFixture,
     });
     expect(listResources).toHaveBeenCalledWith(expect.anything(), {
       viewerId: "user-1",
@@ -164,6 +192,34 @@ describe("GET /api/resources", () => {
     expect(listResources).not.toHaveBeenCalled();
   });
 
+  it("reports the personal quota alongside the page", async () => {
+    const response = await GET(get());
+
+    expect(response.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith("resource_quota", { p_room_id: null });
+    expect((await response.json()).quota).toEqual(quotaFixture);
+  });
+
+  it("reports the room's quota when listing a room", async () => {
+    const response = await GET(get(`?room_id=${ROOM_ID}`));
+
+    expect(response.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith("resource_quota", { p_room_id: ROOM_ID });
+  });
+
+  it("returns 500 when the quota cannot be read", async () => {
+    rpc.mockImplementation(async (fn: string) =>
+      fn === "resource_quota"
+        ? { data: null, error: { message: "quota table missing" } }
+        : { data: true },
+    );
+
+    const response = await GET(get());
+
+    expect(response.status).toBe(500);
+    expect((await response.json()).error.code).toBe("resources_failed");
+  });
+
   it("maps a ResourceError to its own status and code", async () => {
     listResources.mockRejectedValue(
       new ResourceError("not_found", "That resource does not exist or is not available.", 404),
@@ -189,8 +245,9 @@ describe("GET /api/resources", () => {
 
 describe("POST /api/resources", () => {
   beforeEach(() => {
+    allowEverything();
     getClaims.mockResolvedValue({ data: { claims: { sub: "user-1" } } });
-    createClient.mockResolvedValue({ auth: { getClaims } });
+    createClient.mockResolvedValue({ auth: { getClaims }, rpc });
     listResources.mockResolvedValue({
       resources: [],
       limit: 50,
@@ -210,6 +267,61 @@ describe("POST /api/resources", () => {
     const response = await POST(uploadBody({ title: "Notes" }));
 
     expect(response.status).toBe(401);
+    expect(uploadResourceObject).not.toHaveBeenCalled();
+    expect(insertResource).not.toHaveBeenCalled();
+  });
+
+  it("answers an over-ceiling caller with 429 before the body is read", async () => {
+    rpc.mockResolvedValueOnce({ data: false, error: undefined });
+
+    const response = await POST(uploadBody({ title: "Notes" }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect((await response.json()).error.code).toBe("rate_limited");
+    expect(rpc).toHaveBeenCalledWith("rate_limit_take", {
+      p_key: "upload:user:user-1",
+      p_max: 20,
+      p_window: "60 seconds",
+    });
+    expect(uploadResourceObject).not.toHaveBeenCalled();
+    expect(insertResource).not.toHaveBeenCalled();
+  });
+
+  it("applies a second ceiling per upload target", async () => {
+    rpc.mockResolvedValueOnce({ data: true, error: undefined });
+    rpc.mockResolvedValueOnce({ data: false, error: undefined });
+
+    const response = await POST(
+      uploadBody({ title: "Shared notes", room_id: ROOM_ID }),
+    );
+
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("rate_limited");
+    expect(rpc).toHaveBeenCalledWith("rate_limit_take", {
+      p_key: `upload:${ROOM_ID}:user-1`,
+      p_max: 10,
+      p_window: "60 seconds",
+    });
+    expect(requireRoomMembership).not.toHaveBeenCalled();
+    expect(uploadResourceObject).not.toHaveBeenCalled();
+  });
+
+  it("refuses an upload that would cross the quota with 409", async () => {
+    rpc.mockImplementation(async (fn: string) => {
+      if (fn === "rate_limit_take") return { data: true };
+      if (fn === "resource_quota_ok") return { data: false };
+      return { data: quotaFixture };
+    });
+
+    const response = await POST(uploadBody({ title: "Notes" }));
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("quota_exceeded");
+    expect(rpc).toHaveBeenCalledWith("resource_quota_ok", {
+      p_room_id: null,
+      p_add_bytes: expect.any(Number),
+    });
     expect(uploadResourceObject).not.toHaveBeenCalled();
     expect(insertResource).not.toHaveBeenCalled();
   });

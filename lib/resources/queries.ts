@@ -7,6 +7,7 @@ export type ResourceErrorCode =
   | "resources_failed"
   | "storage_upload_failed"
   | "metadata_failed"
+  | "quota_exceeded"
   | "download_failed"
   | "delete_failed"
   | "cleanup_failed";
@@ -25,6 +26,13 @@ export class ResourceError extends Error {
 }
 
 const NOT_FOUND_MESSAGE = "That resource does not exist or is not available.";
+
+/**
+ * Shared by the quota pre-check's 409 and the quota trigger's 409, so the
+ * same condition always reads the same way wherever it is caught.
+ */
+export const QUOTA_EXCEEDED_MESSAGE =
+  "You have reached your storage limit. Delete some files to free space and try again.";
 
 /**
  * Escapes LIKE/ILIKE metacharacters so a search string is matched literally.
@@ -137,6 +145,13 @@ export type InsertResourceInput = {
  * member of the room they were sharing into) and 23503 means the room vanished
  * between the membership check and the write. Both read as the same 404 the
  * rest of the room API gives, so the endpoint never becomes an oracle.
+ *
+ * The quota trigger (migration 0010) raises `P0001` with the message
+ * `quota_exceeded` when this row would push an owner or a room past its
+ * storage limit — the race-safe authority behind the route's pre-check, and
+ * reachable here by a direct PostgREST insert too. It maps to 409 so the
+ * caller can tell "you are full" apart from "something broke"; the route
+ * still rolls the just-written object back either way.
  */
 export async function insertResource(
   client: SupabaseClient,
@@ -162,6 +177,13 @@ export async function insertResource(
     if (error.code === "42501" || error.code === "23503") {
       throw new ResourceError("not_found", NOT_FOUND_MESSAGE, 404);
     }
+    if (error.code === "P0001" && error.message === "quota_exceeded") {
+      throw new ResourceError(
+        "quota_exceeded",
+        QUOTA_EXCEEDED_MESSAGE,
+        409,
+      );
+    }
     throw new Error(`resource insert failed: ${error.message}`);
   }
 
@@ -173,12 +195,13 @@ export async function insertResource(
  * `storage_path` is granted for SELECT so the API can resolve it, and it is
  * stripped again by `toStudyResource` before anything is serialised.
  */
-const RESOURCE_LOCATOR_COLUMNS = "id, room_id, storage_path";
+const RESOURCE_LOCATOR_COLUMNS = "id, room_id, storage_path, original_filename";
 
 export type ResourceLocator = {
   id: string;
   room_id: string | null;
   storage_path: string;
+  original_filename: string;
 };
 
 /**
@@ -221,6 +244,7 @@ export async function findResourceLocator(
     id: data.id,
     room_id: data.room_id,
     storage_path: storagePath,
+    original_filename: data.original_filename,
   };
 }
 

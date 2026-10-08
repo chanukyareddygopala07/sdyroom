@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { emptyBodyResponse, errorResponse, readEmptyBody } from "@/lib/api/responses";
+import { rateLimitedResponse } from "@/lib/rate-limit/check";
+import { blockSpec } from "@/lib/rate-limit/keys";
 import { ModerationError } from "@/lib/moderation/errors";
 import { deleteBlock } from "@/lib/moderation/queries";
 import { createClient } from "@/lib/supabase/server";
@@ -21,6 +23,7 @@ type BlockContext = { params: Promise<{ alias: string }> };
  * | 400 | `{ "error": { "code": "validation" } \| { "code": "invalid_request" } }` — bad alias or a non-empty body |
  * | 401 | `{ "error": { "code": "unauthenticated" } }` |
  * | 404 | `{ "error": { "code": "not_found" } }` — no student studies under that alias |
+ * | 429 | `{ "error": { "code": "rate_limited" } }` |
  * | 500 | `{ "error": { "code": "blocks_failed" } }` |
  */
 export async function DELETE(request: NextRequest, { params }: BlockContext) {
@@ -29,6 +32,15 @@ export async function DELETE(request: NextRequest, { params }: BlockContext) {
 
   if (!data?.claims) {
     return errorResponse("unauthenticated", "Sign in to manage your blocks.", 401);
+  }
+
+  const limited = await rateLimitedResponse(
+    supabase,
+    blockSpec(data.claims.sub),
+    "Too many block changes — wait a while and try again.",
+  );
+  if (limited) {
+    return limited;
   }
 
   const { alias } = await params;

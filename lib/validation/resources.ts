@@ -114,5 +114,22 @@ export const resourceListQuerySchema = z
 /** Dynamic route id for `/api/resources/[id]` and its `download` child. */
 export const resourceIdSchema = z.uuid();
 
+/**
+ * Body of `POST /api/resources/cleanup`.
+ *
+ * Mirrors `GET /api/resources`: the presence of `room_id` selects the scope,
+ * so `{}` sweeps the caller's personal files and `{ "room_id": … }` sweeps
+ * their own uploads inside that room. `.strict()` rejects anything else —
+ * there is no field here that could widen the sweep to somebody else's data
+ * (the storage key prefix and RLS decide that), so an unknown key is a
+ * mistake to surface, not to ignore.
+ */
+export const resourceCleanupSchema = z
+  .object({
+    room_id: z.uuid("That room id is not valid.").optional(),
+  })
+  .strict();
+
 export type ResourceMetadataInput = z.infer<typeof resourceMetadataSchema>;
 export type ResourceListQuery = z.infer<typeof resourceListQuerySchema>;
+export type ResourceCleanupInput = z.infer<typeof resourceCleanupSchema>;

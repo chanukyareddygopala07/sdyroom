@@ -32,6 +32,8 @@ const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const RESOURCE = "44444444-4444-4444-8444-444444444444";
 
+const rpc = vi.fn(async () => ({ data: true }));
+
 function remove(id: string = RESOURCE) {
   return {
     request: new NextRequest(`http://localhost:3000/api/resources/${id}`, {
@@ -43,8 +45,10 @@ function remove(id: string = RESOURCE) {
 
 describe("DELETE /api/resources/[id]", () => {
   beforeEach(() => {
+    rpc.mockReset();
+    rpc.mockResolvedValue({ data: true });
     getClaims.mockResolvedValue({ data: { claims: { sub: OWNER } } });
-    createClient.mockResolvedValue({ auth: { getClaims } });
+    createClient.mockResolvedValue({ auth: { getClaims }, rpc });
     findResourceLocator.mockResolvedValue({
       id: RESOURCE,
       room_id: null,
@@ -73,6 +77,25 @@ describe("DELETE /api/resources/[id]", () => {
     expect(response.status).toBe(400);
     expect((await response.json()).error.code).toBe("validation");
     expect(findResourceLocator).not.toHaveBeenCalled();
+  });
+
+  it("answers an over-ceiling caller with 429 before touching the row", async () => {
+    rpc.mockResolvedValueOnce({ data: false });
+
+    const { request, context } = remove();
+    const response = await DELETE(request, context);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect((await response.json()).error.code).toBe("rate_limited");
+    expect(rpc).toHaveBeenCalledWith("rate_limit_take", {
+      p_key: `resource_delete:user:${OWNER}`,
+      p_max: 30,
+      p_window: "60 seconds",
+    });
+    expect(findResourceLocator).not.toHaveBeenCalled();
+    expect(removeResourceObject).not.toHaveBeenCalled();
+    expect(deleteResourceMetadata).not.toHaveBeenCalled();
   });
 
   it("answers 404 when RLS hides the row", async () => {

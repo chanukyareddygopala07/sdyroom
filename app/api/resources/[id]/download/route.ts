@@ -1,9 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { errorResponse } from "@/lib/api/responses";
+import { rateLimitedResponse } from "@/lib/rate-limit/check";
+import { downloadSpec } from "@/lib/rate-limit/keys";
 import { findResourceLocator, ResourceError } from "@/lib/resources/queries";
 import { createResourceDownloadUrl } from "@/lib/resources/storage";
 import { createClient } from "@/lib/supabase/server";
-import { resourceIdSchema } from "@/lib/validation/resources";
+import {
+  DOWNLOAD_TTL_SECONDS,
+  resourceIdSchema,
+} from "@/lib/validation/resources";
 
 type DownloadContext = { params: Promise<{ id: string }> };
 
@@ -28,6 +33,7 @@ type DownloadContext = { params: Promise<{ id: string }> };
  * | 400 | `{ "error": { "code": "validation" } }` |
  * | 401 | `{ "error": { "code": "unauthenticated" } }` |
  * | 404 | `{ "error": { "code": "not_found" } }` |
+ * | 429 | `{ "error": { "code": "rate_limited" } }` |
  * | 500 | `{ "error": { "code": "download_failed" } }` |
  */
 export async function GET(request: NextRequest, { params }: DownloadContext) {
@@ -47,6 +53,17 @@ export async function GET(request: NextRequest, { params }: DownloadContext) {
     ]);
   }
 
+  // Signing a URL is cheap, so this ceiling is generous: it exists to bound
+  // scripted token-minting, not to slow down a student opening their notes.
+  const limited = await rateLimitedResponse(
+    supabase,
+    downloadSpec(claims.sub),
+    "Too many download requests — wait about a minute and try again.",
+  );
+  if (limited) {
+    return limited;
+  }
+
   try {
     const locator = await findResourceLocator(supabase, parsedId.data);
     if (!locator) {
@@ -60,6 +77,8 @@ export async function GET(request: NextRequest, { params }: DownloadContext) {
     const { url, expires_in } = await createResourceDownloadUrl(
       supabase,
       locator.storage_path,
+      DOWNLOAD_TTL_SECONDS,
+      locator.original_filename,
     );
 
     return NextResponse.json({
