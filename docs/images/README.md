@@ -1,9 +1,16 @@
 # Image assets
 
 Screenshots, demo recordings and other visual assets for the repository
-presentation live in this directory. None are checked in yet — the README's
-Screenshots & Demo section carries a commented placeholder until the first real
-asset lands.
+presentation live in this directory. The project logo is checked in
+(`sdyroom-logo.png`, referenced by the README hero); screenshots and demo
+recordings are still pending — the README's Screenshots & Demo section carries a
+commented placeholder until the first real screenshot lands.
+
+## Checked in
+
+| File | Shows |
+| --- | --- |
+| `sdyroom-logo.png` | The SdyRoom logo/mark (1254×1254 RGBA PNG, ~1.1 MB), shown at the top of `README.md` |
 
 ## How to add one
 

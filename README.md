@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/sdyroom-logo.png" alt="SdyRoom logo" width="160">
+</p>
+
 <h1 align="center">SdyRoom</h1>
 
 <p align="center">
