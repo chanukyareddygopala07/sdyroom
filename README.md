@@ -391,3 +391,17 @@ Please file feedback and issues over on the [Supabase GitHub org](https://github
 - [Next.js Subscription Payments Starter](https://github.com/vercel/nextjs-subscription-payments)
 - [Cookie-based Auth and the Next.js 13 App Router (free course)](https://youtube.com/playlist?list=PL5S4mPUpp4OtMhpnp93EFSo42iQ40XjbF)
 - [Supabase Auth and the Next.js App Router](https://github.com/supabase/supabase/tree/master/examples/auth/nextjs)
+- # SdyRoom
+
+### Study together. Stay accountable. Achieve more.
+
+Privacy-first virtual study rooms for students preparing for
+competitive and university examinations.
+
+[![CI](https://github.com/chanukyareddygopala07/sdyroom/actions/workflows/ci.yml/badge.svg)](https://github.com/chanukyareddygopala07/sdyroom/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/chanukyareddygopala07/sdyroom/graph/badge.svg)](https://codecov.io/gh/chanukyareddygopala07/sdyroom)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
+![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3FCF8E?logo=supabase)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-06B6D4?logo=tailwindcss)
