@@ -405,3 +405,196 @@ competitive and university examinations.
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
 ![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3FCF8E?logo=supabase)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-06B6D4?logo=tailwindcss)
+
+<br />
+
+🚀 Live Demo ·
+📖 Documentation ·
+🐛 Report a Bug ·
+💡 Request a Feature
+
+<br />
+
+<img src="docs/images/sdyroom-hero.png" alt="SdyRoom — virtual study rooms" width="900" />
+
+</div>
+
+🎯 What is SdyRoom?
+
+Studying alone makes consistency difficult.
+
+SdyRoom gives students a focused virtual environment where they can find study rooms, set goals, focus together, collaborate privately, and stay accountable.
+
+Built for students preparing for:
+
+🎓 University & semester examinations
+📐 JEE
+🧬 NEET
+💻 Programming & technical interviews
+📚 Competitive examinations
+🧠 Personal learning goals
+
+SdyRoom turns studying from a solitary activity into a focused, accountable experience.
+
+✨ Key Features
+Feature	Description
+🏠 Study Rooms	Create and join focused virtual study spaces
+🌎 Room Discovery	Find public rooms based on subjects and goals
+⏱️ Focus Sessions	Structure study time around focused sessions
+🎯 Study Goals	Define what you want to accomplish
+🔐 Privacy First	Private rooms and resources protected by authorization
+📄 Resource Sharing	Share notes and study materials securely
+👥 Accountability	Study alongside other motivated students
+🤖 AI Roadmap	Future AI-powered planning and study assistance
+🎬 See SdyRoom in Action
+
+<div align="center">
+
+<img src="docs/images/sdyroom-demo.gif" alt="SdyRoom demo" width="850" />
+
+</div>
+
+Typical workflow
+Discover a room
+       ↓
+Join the study session
+       ↓
+Set your study goal
+       ↓
+Focus together
+       ↓
+Track your progress
+       ↓
+Repeat consistently
+🖥️ Screenshots
+Landing Page
+
+<img src="docs/images/landing.png" alt="SdyRoom landing page" width="900" />
+
+Study Room Discovery
+
+<img src="docs/images/rooms.png" alt="SdyRoom room discovery" width="900" />
+
+Create a Study Room
+
+<img src="docs/images/create-room.png" alt="Create a study room" width="900" />
+
+Study Session
+
+<img src="docs/images/study-session.png" alt="SdyRoom study session" width="900" />
+
+🏗️ Built With
+
+Frontend
+
+Next.js
+React
+TypeScript
+Tailwind CSS
+
+Backend & Infrastructure
+
+Supabase
+PostgreSQL
+Supabase Auth
+PostgreSQL Row Level Security
+
+Quality
+
+Vitest
+Integration testing
+GitHub Actions
+ESLint
+TypeScript
+🔐 Security by Design
+
+SdyRoom treats student privacy as a core product requirement.
+
+The platform uses:
+
+PostgreSQL Row Level Security
+Authentication-gated room discovery
+Private-room authorization
+Protected resource access
+Minimal API responses
+Server-side validation
+Rate limiting
+Secure signed URLs
+Automated security tests
+
+The goal is simple:
+
+Students should only be able to access information they are authorized to see.
+
+🧠 AI Roadmap
+
+AI will enhance the study experience without replacing the core learning process.
+
+Planned capabilities include:
+
+Personalized study plans
+Smart revision scheduling
+AI study assistant
+Document summarization
+Question generation
+Weak-topic detection
+Study-session insights
+Personalized recommendations
+🗺️ Roadmap
+✅ Foundation
+
+Project architecture
+
+Authentication
+
+Profiles
+
+Public room discovery
+
+Room creation
+
+Membership authorization
+
+RLS security
+
+API validation
+
+Automated testing
+
+CI
+
+🚧 Core Study Experience
+
+Complete study-room experience
+
+Focus sessions
+
+Study timers
+
+Goals
+
+Progress tracking
+
+Real-time presence
+
+Resource sharing
+
+🔮 Intelligence
+
+AI study assistant
+
+Personalized planning
+
+Smart revision
+
+AI-generated practice
+
+Learning analytics
+
+<div align="center">
+
+⭐ If SdyRoom is useful to you, consider starring the repository.
+
+Built for students who want to study better, together.
+
+</div>
