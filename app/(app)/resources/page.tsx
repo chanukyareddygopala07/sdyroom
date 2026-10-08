@@ -1,4 +1,5 @@
 import { ResourceLibrary } from "@/components/resources/resource-library";
+import { fetchResourceQuota } from "@/lib/resources/quota";
 import { listResources } from "@/lib/resources/queries";
 import { createClient } from "@/lib/supabase/server";
 import { RESOURCE_PAGE_SIZE_DEFAULT } from "@/lib/validation/resources";
@@ -26,20 +27,30 @@ export default async function ResourcesPage() {
     redirect("/auth/login");
   }
 
-  const page = await listResources(supabase, {
-    viewerId,
-    scope: "personal",
-    q: "",
-    subject: null,
-    chapter: null,
-    limit: RESOURCE_PAGE_SIZE_DEFAULT,
-    offset: 0,
-  });
+  const [page, quota] = await Promise.all([
+    listResources(supabase, {
+      viewerId,
+      scope: "personal",
+      q: "",
+      subject: null,
+      chapter: null,
+      limit: RESOURCE_PAGE_SIZE_DEFAULT,
+      offset: 0,
+    }),
+    // Display-only: if the quota numbers cannot be read the library still
+    // opens (the upload route and the DB trigger remain the enforcement),
+    // so a quota outage never becomes a listing outage.
+    fetchResourceQuota(supabase, null).catch((error: unknown) => {
+      console.error("[resources/page] quota fetch failed:", error);
+      return null;
+    }),
+  ]);
 
   return (
     <ResourceLibrary
       scope={{ kind: "personal" }}
       initialResources={page.resources}
+      quota={quota}
       idPrefix="personal"
       heading="My resources"
       description="Private study files only you can open. Share one with a room from that room's workspace."

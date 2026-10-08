@@ -14,6 +14,8 @@ import {
   RoomAccessError,
   RoomOwnerError,
 } from "@/lib/rooms/access";
+import { rateLimitedResponse } from "@/lib/rate-limit/check";
+import { inviteSpec } from "@/lib/rate-limit/keys";
 import { createClient } from "@/lib/supabase/server";
 import { createInvitationSchema } from "@/lib/validation/invitations";
 import { roomIdSchema } from "@/lib/validation/rooms";
@@ -40,6 +42,7 @@ type InvitationsContext = { params: Promise<{ id: string }> };
  * | 403 | `{ "error": { "code": "not_owner" } }` — member, not owner |
  * | 404 | `{ "error": { "code": "not_found" \| "invitee_not_found" } }` — room: missing or private-from-outside; alias: no such student |
  * | 409 | `{ "error": { "code": "room_public" \| "self_invite" \| "already_member" \| "already_invited" } }` |
+ * | 429 | `{ "error": { "code": "rate_limited" } }` |
  * | 500 | `{ "error": { "code": "invitation_create_failed" } }` |
  *
  * A non-member gets 404 before the owner check runs, so the endpoint is not
@@ -59,6 +62,15 @@ export async function POST(request: NextRequest, { params }: InvitationsContext)
     return errorResponse("validation", "That room id is not valid.", 400, [
       { path: "id", message: "Room id must be a UUID." },
     ]);
+  }
+
+  const limited = await rateLimitedResponse(
+    supabase,
+    inviteSpec(parsedRoomId.data, data.claims.sub),
+    "Too many invitations — wait a while and try again.",
+  );
+  if (limited) {
+    return limited;
   }
 
   const parsedBody = await readJsonBody(request);

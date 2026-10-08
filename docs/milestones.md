@@ -17,7 +17,8 @@ Working log: what has landed, what each milestone still owes.
 | I — private notes and PDF sharing: `0005_study_resources.sql`, private storage bucket, resource APIs, personal/room library | `4880163` (PR #5) | done |
 | Private room invitations + member roster — `0007_room_invitations.sql`, addressed invitations, invite inbox, owner invite panel, `room_roster` RPC | `b4e1f33` (PR #7) | done |
 | Room management — `0008_room_management.sql` (`update_room` / `delete_room` RPCs, room-owner storage sweep policy), owner-only settings page, `PATCH`/`DELETE /api/rooms/[id]`, type-the-name delete confirmation | `61a99a0` (PR #8) | done |
-| Member safety — `0009_moderation.sql` (reports, one-way blocks, mutes enforced by the insert policy, member removal, owner-appointed moderators, audit trail), moderation inbox, shared report dialog, roster action menu | `feat/moderation-safety` | in review (PR #9) |
+| Member safety — `0009_moderation.sql` (reports, one-way blocks, mutes enforced by the insert policy, member removal, owner-appointed moderators, audit trail), moderation inbox, shared report dialog, roster action menu | `1be4633` (PR #9) | done |
+| Resource hardening — `0010_resource_hardening.sql` (`rate_limits` + `rate_limit_take`, 1 GiB/500 MiB quotas with the `study_resources_quota_guard` trigger, `resource_quota`/`resource_quota_ok`), rate limits on uploads/deletes/downloads/sweeps/reports/blocks/mutes/invites, `POST /api/resources/cleanup`, quota line + quota-full state in the upload UI | `feat/resource-security` | in review (PR #10) |
 
 ## Milestone D — task breakdown
 
@@ -458,10 +459,21 @@ Working log: what has landed, what each milestone still owes.
   unchangeable. Ownership transfer and visibility changes are explicit
   follow-ups.
 - **No alias editing.** Changing the study alias after onboarding is not built.
+- **Upload abuse is bounded (PR 10); scanning and per-network limits are not.**
+  Every state-changing resource route now sits behind the shared fixed-window
+  limiter (`rate_limits` + `rate_limit_take`, `429` + `Retry-After`, keyed per
+  user and per target), storage is quota'd at 1 GiB per user and 500 MiB per
+  room (pre-check plus an authority trigger, `409 quota_exceeded`), and
+  `POST /api/resources/cleanup` sweeps the caller's own orphaned objects and
+  rows behind a 60 s grace period. The library shows "X of Y used" and locks
+  the upload form when full. Still deliberately absent: malware scanning, a
+  per-IP or global budget (limits are keyed per signed-in session), and any
+  bucket-side per-user limit (a bucket cannot know which student is uploading).
 - **No typing indicators or file previews.** Chat is
   append-only history (no edit, delete or react) with member safety layered on
   in PR 09 (mutes enforced by the insert policy, blocks filtering the select
   policy, reports routed to the owner's inbox); room presence shows who is
   in the room and whether a shared session is running (alias + flag only, no
-  ids); files are downloaded rather than previewed inline, with no versioning,
-  no per-room quota UI and no search beyond the title/subject/chapter filters.
+  ids); files are downloaded rather than previewed inline, with no versioning
+  and no search beyond the title/subject/chapter filters (the per-scope quota
+  line shipped in PR 10).

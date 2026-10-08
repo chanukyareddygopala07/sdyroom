@@ -1,8 +1,30 @@
 # PR 10 — Resource security hardening (size, content checks, quotas, cleanup)
 
-**Status:** specification only — no GitHub PR exists.
+**Status:** in review — [PR #10](https://github.com/chanukyareddygopala07/sdyroom/pull/10) (`feat/resource-security`).
 **Owner:** Dev B (Cursor) · **Complexity:** Medium–Large · **Migration:** `0010_resource_hardening.sql`
 **Depends on:** nothing (parallel lane — starts any time after `origin/main`)
+
+---
+
+### Reconciliation (decisions locked before implementation)
+
+| Decision | Chosen | Why |
+| --- | --- | --- |
+| Upload routes | The PR-05 pair `POST`/`GET /api/resources` (scope in the body/query), **not** the per-room `POST /api/rooms/[id]/resources` sketched here | PR 05 shipped one endpoint pair for both scopes; inventing a second route shape would split the quota, rate-limit and validation logic across two controllers for no product gain. |
+| Per-file ceiling | **20 MiB**, not the 25 MiB recommended above | The bucket (`file_size_limit = 20971520`), the `study_resources_size` CHECK and the `content-length` guard already enforce 20 MiB end to end; a second, larger number would be the one layer that disagrees. |
+| Error codes | Repo codes kept: `413 file_too_large`, `415 unsupported_file_type`, `500 storage_upload_failed`; spec's `payload_too_large` / `unsupported_media_type` / `upload_failed` dropped. New codes per spec: `409 quota_exceeded`, `429 rate_limited` | The error envelope is a published contract across five merged PRs; renaming existing codes to match a draft spec would break clients for aesthetics. |
+| Magic-byte sniffing | **No new work — PR 05 already shipped it.** `lib/resources/files.ts` validates extension, declared type, magic bytes and text encoding; `study-resources.test.ts` proves a mismatched file is refused | This spec's Problem §2 predates the PR-05 implementation. Sniffing behaviour is left byte-for-byte untouched. |
+| Compensating delete | **No new work — PR 05 already shipped it** (object put → row insert → object deleted on insert failure); verified, no regression, and now wrapped by the rate limiter | Same as above: the write-path guarantee existed; this PR hardens what surrounds it. |
+| Orphan sweep endpoint | `POST /api/resources/cleanup` — body `{}` sweeps the caller's personal folder, `{"room_id"}` sweeps one room the caller belongs to — instead of an admin route or a per-room maintenance path | The spec's out-of-scope section forbids an admin role, and "caller sweeps what they can see" was the prescribed shape. Prefix-scoped, membership-gated, rate-limited before the body is even parsed. |
+| `sweep_storage_orphans` RPC | **Not shipped as SQL.** The set difference lives in the route (it lists rows *and* bucket objects under the prefix; SQL can neither list objects nor delete them) | The spec itself anticipated this ("the actual storage delete happens in the route"). No RPC, no extra execute grant. |
+| Second sweep direction | **Both directions shipped** (object-without-row → delete object; row-without-object → delete row), not the "choose the cheap direction" option | Storage rows are exactly what room deletion forgets; a row without an object advertises a download that can never succeed. Both are scoped to the caller's own prefix and skipped under a 60 s grace period. |
+| Body handling | The whole multipart body is buffered, bounded by the 20 MiB ceiling — **not** the streaming ≤16-byte sniff window sketched here | PR 05's parser buffers within the ceiling and the ceiling is small; streaming is an optimization, not a security boundary, at 20 MiB. The memory-blow-up risk the spec guards against is removed by the cap itself. |
+| Quota numbers | **1 GiB per user, 500 MiB per room** (the standing questions above, resolved) | Enforced twice: `resource_quota_ok` pre-check in the route (fail-open — a quota outage must not take uploads down) and the `study_resources_quota_guard` BEFORE INSERT trigger as the authority (advisory locks user→room, `P0001` → `409 quota_exceeded`). The pre-check's advisory lock serializes the two racing uploads the integration test drives. |
+| Rate-limit windows | Uploads 20/min per user + 10/min per target, delete 30/min, download 120/min, cleanup 5/min, invites 10/h, reports 20/h, blocks 30/h, mutes 30/h — published as a key table in `docs/API_CONTRACTS.md` | The spec's "10 uploads per minute per user per room" became two keys (user + target) so a student cannot be locked out of their own library by flooding one room, and every shared key PRs 07/09/11 were told to reuse is now real and documented. |
+| Rate limits for reports/blocks/mutes/invites | **Wired in this PR**, retroactively | The spec assigned key *naming* to 07/09/11; those PRs merged before the limiter existed, so this PR fits the existing routes to the shared mechanism instead of leaving documented-but-unenforced limits. |
+| Limiter storage | `rate_limits` table: RLS enabled with **zero policies**, **zero grants** for every role, one `SECURITY DEFINER` RPC `rate_limit_take` (atomic upsert, fixed window, `search_path = ''`, **fail-open** — only an explicit `false` refuses) | "Two closed doors": even a future grant widening leaves RLS with no policy to allow anything; tests widen a grant inside a transaction, observe the freeze, revoke and re-check. |
+| Bucket configuration | The migration owns the bucket (`0005`, idempotent upsert); no `config.toml` storage section exists locally; **verified** by a direct oversized put that bypasses the app entirely | Spec risk "storage-layer limits not settable → false confidence": the integration suite now pushes 20 MiB + 1 byte straight at storage and asserts the bucket's own refusal with nothing written. |
+| Signed-URL serve review | `Content-Disposition: attachment` **shipped**: every download URL carries `&download=<original filename>` (single-encoded, appended post-signature), and the integration suite asserts the disposition, the 300 s `Expires`/`Date` pair, and that listings embed no signature. `X-Content-Type-Options: nosniff` is **not emitted by the storage origin** and cannot be set from the app — documented as a known limitation in `docs/SECURITY.md`, mitigated by sniffed content types, the closed allow list, and the attachment disposition | The spec's serve-review item asked for attachment "for non-preview types"; this app previews nothing, so attachment applies to every type. Header evidence recorded in `docs/local-supabase.md`. |
 
 ---
 
@@ -275,31 +297,42 @@ docs/local-supabase.md (bucket settings), docs/milestones.md
 
 ### Acceptance criteria
 
-- [ ] A file over the cap is refused with `413` and leaves no object behind.
-- [ ] Type-confused uploads are refused with `415`; stored `mime_type` is
-      sniff-derived for accepted uploads.
-- [ ] Quota blocks the (limit+1)th byte-set with `409` and frees correctly on
-      delete.
-- [ ] A failed row insert never leaves an object (compensating delete) and a
-      swept room reports `removed_objects ≥ 1` for a seeded orphan.
-- [ ] Rate limits reject over-limit requests with `429` and the UI says so.
-- [ ] Signed URLs are not in list payloads and not in logs.
-- [ ] The shared rate-limit keys are documented so PRs 07/09/11 use them.
-- [ ] All three suites + build green locally and in CI.
+- [x] A file over the cap is refused with `413` and leaves no object behind.
+- [x] Type-confused uploads are refused with `415`; stored `mime_type` is
+      sniff-derived for accepted uploads (PR 05's sniff, unchanged and
+      re-asserted).
+- [x] Quota blocks the (limit+1)th byte-set with `409` and frees correctly on
+      delete (integration: fill → refuse, delete → the next upload lands).
+- [x] A failed row insert never leaves an object (PR 05's compensating delete,
+      no regression) and a swept room reports `removed_objects ≥ 1` for a
+      seeded orphan.
+- [x] Rate limits reject over-limit requests with `429` and the UI says so.
+- [x] Signed URLs are not in list payloads and not in logs (payload asserted in
+      integration; no console statement in the resource routes or libraries
+      emits a URL or token — verified by search).
+- [x] The shared rate-limit keys are documented so PRs 07/09/11 use them
+      (`docs/API_CONTRACTS.md` → "Rate limits (PR 10)").
+- [x] All three suites + build green locally and in CI. *(local: lint, types,
+      778 unit / 60 files, 265 integration / 15 files, 38 e2e / 11 specs after a
+      fresh `db reset`; CI: quality 1m13s, integration 4m4s, e2e 6m40s on
+      [run 37756407810](https://github.com/chanukyareddygopala07/sdyroom/actions/runs/37756407810).)*
 
 ### Definition of Done
 
-1. `npx supabase db reset` from scratch; `rate_limits` and RPC probes pass
+1. [x] `npx supabase db reset` from scratch; `rate_limits` and RPC probes pass
    (direct insert denied, `rate_limit_take` atomic under two concurrent calls).
-2. Bucket-level limits documented and, where config supports it locally,
-   verified to reject an oversized put independently of the app.
-3. CI green on all three jobs.
-4. `docs/API_CONTRACTS.md` has explicit limit/quota/rate rows (the upload
+2. [x] Bucket-level limits documented and, where config supports it locally,
+   verified to reject an oversized put independently of the app (integration
+   test pushes 20 MiB + 1 byte straight at storage — refused by
+   `file_size_limit`, nothing written).
+3. [x] CI green on all three jobs (quality 1m13s, integration 4m4s, e2e 6m40s
+   on [run 37756407810](https://github.com/chanukyareddygopala07/sdyroom/actions/runs/37756407810)).
+4. [x] `docs/API_CONTRACTS.md` has explicit limit/quota/rate rows (the upload
    sequence section updated with the compensating-delete step);
    `docs/SECURITY.md` gains an upload abuse row; `docs/local-supabase.md`
    bucket section; `docs/milestones.md` resource rows updated.
-5. Rate-limit key naming published for other PRs.
-6. Reviewed by Dev A.
+5. [x] Rate-limit key naming published for other PRs.
+6. [ ] Reviewed by Dev A.
 
 ### Owner
 

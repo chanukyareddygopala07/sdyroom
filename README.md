@@ -85,7 +85,7 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**` — 240 tests covering auth at the API boundary, onboarding
+  over `tests/integration/**` — 265 tests covering auth at the API boundary, onboarding
   and response privacy, RLS/grant behaviour per role, `create_room` atomicity
   (including the revoked-grant rollback), joining and capacity races, the shared focus
   timer state machine, personal-goal privacy, append-only room chat, the whole
@@ -94,15 +94,20 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   live Realtime delivery of `focus_sessions` changes over a real WebSocket, the
   addressed-invitation lifecycle (create/accept/reject/revoke/expiry, the last-seat
   accept race, roster denial for non-members, policy and grant freezes), room
-  management, and member moderation (report workflow with reporter privacy, mute
+  management, member moderation (report workflow with reporter privacy, mute
   lifecycle with the direct-insert control, moderator appointment, one-way block
-  filtering, member removal, audit-row and grant probes, cross-room isolation) —
+  filtering, member removal, audit-row and grant probes, cross-room isolation), and
+  resource hardening (the `rate_limits` freeze with a grant-revoke control, `413`/`415`,
+  the bucket's own oversized-put refusal independent of the app,
+  upload/delete/sweep `429`s, both orphan-sweep directions, the quota chain
+  including a two-upload race resolved by the database trigger, and the
+  signed-download serve review) —
   every suite shares a single control test that widens a grant and rolls it back.
   It needs
   the local stack (`npx supabase start && npx supabase db reset`) and never uses a
   service-role key. `passWithNoTests` stays unset, so a missing suite still exits
   non-zero. See `tests/integration/README.md`.
-- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 33 Chromium tests
+- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 38 Chromium tests
   driving the real app (`next dev`) against the local stack: the full two-student
   workflow through the forms, private-room access, room chat, room presence across
   two browsers, the invitation lifecycle (invite by alias → inbox → accept, stranger
@@ -110,11 +115,13 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
   revoke → delete file lifecycle through the real upload form, room settings →
   close → name-typed delete across two browsers, expiry/failure/recovery
   scenarios, Realtime-vs-polling proven on an intercepted WebSocket (including
-  stale and duplicate frame replay), and member safety (message report → owner's
+  stale and duplicate frame replay), member safety (message report → owner's
   moderation inbox → review → resolve with no reporter identity shown, one-way
   block filtering, owner mute → disabled composer → removal to a 404, and the
   documented refusal codes for anonymous, non-member and plain-member API
-  attempts). Test users are scoped to a per-run id and deleted
+  attempts), and resource hardening (oversize/extension preflights failing in the
+  browser, the quota line and quota-full locking, and a spent upload window
+  answered with `429` + `Retry-After`). Test users are scoped to a per-run id and deleted
   by the global teardown (which also removes this run's storage objects before its
   `auth.users` rows). It needs the local stack plus `npx playwright install chromium`.
   See `tests/e2e/README.md`.

@@ -3,6 +3,7 @@ import {
   formatBytes,
   inspectFile,
   isFileRejection,
+  isSupportedUploadName,
   validateFilename,
   validateFileSize,
   validateTextContent,
@@ -246,5 +247,32 @@ describe("formatBytes", () => {
   it("never renders a meaningless size", () => {
     expect(formatBytes(-1)).toBe("—");
     expect(formatBytes(Number.NaN)).toBe("—");
+  });
+});
+
+describe("isSupportedUploadName", () => {
+  it.each([
+    "notes.pdf",
+    "scan.PNG",
+    "photo.jpeg",
+    "photo.jpg",
+    "plain.txt",
+    "notes.md",
+    "notes.markdown",
+  ])("accepts %s against the shared allow list", (name) => {
+    expect(isSupportedUploadName(name)).toBe(true);
+  });
+
+  it.each(["setup.exe", "archive.zip", "script.sh", "notes", "notes."])(
+    "refuses %s without a round trip",
+    (name) => {
+      expect(isSupportedUploadName(name)).toBe(false);
+    },
+  );
+
+  it("matches the server's extension list rather than a second copy", () => {
+    // The client check reads RESOURCE_EXTENSIONS, the same constant the
+    // server's inspectFile consults — an extension added there lights up here.
+    expect(isSupportedUploadName("anything.markdown")).toBe(true);
   });
 });

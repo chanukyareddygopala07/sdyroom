@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { errorResponse } from "@/lib/api/responses";
+import { rateLimitedResponse } from "@/lib/rate-limit/check";
+import { resourceDeleteSpec } from "@/lib/rate-limit/keys";
 import {
   deleteResourceMetadata,
   findResourceLocator,
@@ -41,6 +43,7 @@ type ResourceContext = { params: Promise<{ id: string }> };
  * | 400 | `{ "error": { "code": "validation" } }` |
  * | 401 | `{ "error": { "code": "unauthenticated" } }` |
  * | 404 | `{ "error": { "code": "not_found" } }` |
+ * | 429 | `{ "error": { "code": "rate_limited" } }` |
  * | 500 | `{ "error": { "code": "delete_failed" \| "cleanup_failed" } }` |
  */
 export async function DELETE(request: NextRequest, { params }: ResourceContext) {
@@ -58,6 +61,15 @@ export async function DELETE(request: NextRequest, { params }: ResourceContext) 
     return errorResponse("validation", "That resource id is not valid.", 400, [
       { path: "id", message: "Resource id must be a UUID." },
     ]);
+  }
+
+  const limited = await rateLimitedResponse(
+    supabase,
+    resourceDeleteSpec(claims.sub),
+    "Too many delete requests — wait about a minute and try again.",
+  );
+  if (limited) {
+    return limited;
   }
 
   try {

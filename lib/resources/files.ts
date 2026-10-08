@@ -198,6 +198,18 @@ function extensionOf(name: string): string {
 }
 
 /**
+ * Whether the file name is one this app could possibly accept.
+ *
+ * The upload form calls this before sending, so an obvious `.exe` gets an
+ * instant message instead of a round trip — the server still runs the full
+ * `inspectFile` check, which is what actually decides. One allow list
+ * (`RESOURCE_EXTENSIONS`) drives both, so the two can never disagree.
+ */
+export function isSupportedUploadName(name: string): boolean {
+  return RESOURCE_EXTENSIONS[extensionOf(name)] !== undefined;
+}
+
+/**
  * Full validation of one uploaded file: name, size, extension, signature and
  * — for text — encoding. The returned content type is always derived from the
  * bytes, so a browser-supplied MIME type can never widen what storage accepts.

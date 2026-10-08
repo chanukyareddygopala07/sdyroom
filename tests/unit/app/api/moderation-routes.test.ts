@@ -40,6 +40,8 @@ vi.mock("@/lib/moderation/queries", async (importOriginal) => ({
   createBlock,
 }));
 
+const rpc = vi.fn(async () => ({ data: true }));
+
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const REPORT_ID = "22222222-2222-4222-8222-222222222222";
 const MESSAGE_ID = "33333333-3333-4333-8333-333333333333";
@@ -75,8 +77,10 @@ function patch(body?: string, id: string = REPORT_ID) {
 
 describe("moderation routes", () => {
   beforeEach(() => {
+    rpc.mockReset();
+    rpc.mockResolvedValue({ data: true });
     getClaims.mockResolvedValue({ data: { claims: { sub: "user-1" } } });
-    createClient.mockResolvedValue({ auth: { getClaims } });
+    createClient.mockResolvedValue({ auth: { getClaims }, rpc });
     requireRoomMembership.mockResolvedValue(undefined);
     createReport.mockResolvedValue({
       code: "created",
@@ -121,6 +125,30 @@ describe("moderation routes", () => {
 
       expect(response.status).toBe(400);
       expect((await response.json()).error.code).toBe("validation");
+      expect(requireRoomMembership).not.toHaveBeenCalled();
+      expect(createReport).not.toHaveBeenCalled();
+    });
+
+    it("answers an over-ceiling reporter with 429 before reading the body", async () => {
+      rpc.mockResolvedValueOnce({ data: false });
+      const [request, context] = post(
+        JSON.stringify({
+          subject_type: "message",
+          subject_id: MESSAGE_ID,
+          reason: "spam",
+        }),
+      );
+
+      const response = await reportsPost(request, context);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBe("3600");
+      expect((await response.json()).error.code).toBe("rate_limited");
+      expect(rpc).toHaveBeenCalledWith("rate_limit_take", {
+        p_key: `report:${ROOM_ID}:user-1`,
+        p_max: 20,
+        p_window: "3600 seconds",
+      });
       expect(requireRoomMembership).not.toHaveBeenCalled();
       expect(createReport).not.toHaveBeenCalled();
     });
@@ -362,6 +390,28 @@ describe("moderation routes", () => {
   });
 
   describe("POST /api/blocks", () => {
+    it("answers an over-ceiling caller with 429 before reading the body", async () => {
+      rpc.mockResolvedValueOnce({ data: false });
+
+      const response = await blocksPost(
+        new NextRequest("http://localhost:3000/api/blocks", {
+          method: "POST",
+          body: JSON.stringify({ alias: "Ada" }),
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBe("3600");
+      expect((await response.json()).error.code).toBe("rate_limited");
+      expect(rpc).toHaveBeenCalledWith("rate_limit_take", {
+        p_key: "block:user:user-1",
+        p_max: 30,
+        p_window: "3600 seconds",
+      });
+      expect(createBlock).not.toHaveBeenCalled();
+    });
+
     it("rejects unknown fields outright", async () => {
       const response = await blocksPost(
         new NextRequest("http://localhost:3000/api/blocks", {

@@ -3,6 +3,8 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { formatBytes, isSupportedUploadName } from "@/lib/resources/files";
+import type { ResourceQuota } from "@/lib/resources/quota";
 import type { StudyResource } from "@/lib/resources/types";
 import { MAX_FILE_BYTES, MAX_TITLE_CHARS } from "@/lib/validation/resources";
 import { useRouter } from "next/navigation";
@@ -69,10 +71,13 @@ function postUpload(
 export function ResourceUploadForm({
   scope,
   idPrefix,
+  quota,
   onUploaded,
 }: {
   scope: { kind: "personal" } | { kind: "room"; roomId: string };
   idPrefix: string;
+  /** Storage quota for this scope, as `GET /api/resources` reports it. */
+  quota?: ResourceQuota | null;
   onUploaded: (resource: StudyResource) => void;
 }) {
   const router = useRouter();
@@ -88,6 +93,10 @@ export function ResourceUploadForm({
   const [error, setError] = useState<string | null>(null);
 
   const maxMiB = Math.floor(MAX_FILE_BYTES / (1024 * 1024));
+  // Prop-driven, so it clears itself the moment a delete (or any
+  // `router.refresh()`) brings back fresh numbers — no local flag to forget.
+  const quotaFull =
+    quota !== undefined && quota !== null && quota.used_bytes >= quota.limit_bytes;
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -105,6 +114,16 @@ export function ResourceUploadForm({
     }
     if (file.size > MAX_FILE_BYTES) {
       setError(`Files must be ${maxMiB} MiB or smaller.`);
+      return;
+    }
+    if (!isSupportedUploadName(file.name)) {
+      setError("Only PDF, PNG, JPEG, TXT and Markdown files can be uploaded.");
+      return;
+    }
+    if (quotaFull) {
+      setError(
+        "You have reached your storage limit. Delete some files to free space and try again.",
+      );
       return;
     }
 
@@ -152,9 +171,22 @@ export function ResourceUploadForm({
       className="flex flex-col gap-3 rounded-xl border p-4"
       aria-labelledby={`${idPrefix}-upload-heading`}
     >
-      <h3 id={`${idPrefix}-upload-heading`} className="text-sm font-semibold">
-        Upload a file
-      </h3>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 id={`${idPrefix}-upload-heading`} className="text-sm font-semibold">
+          Upload a file
+        </h3>
+        {quota && (
+          <p className="text-xs text-muted-foreground">
+            {formatBytes(quota.used_bytes)} of {formatBytes(quota.limit_bytes)} used
+          </p>
+        )}
+      </div>
+
+      {quotaFull && (
+        <p className="text-xs text-amber-600" role="status">
+          Storage full — delete files to make room for new uploads.
+        </p>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={fileInputId}>File</Label>
@@ -234,7 +266,12 @@ export function ResourceUploadForm({
       )}
 
       <div>
-        <Button type="submit" size="sm" disabled={busy} aria-busy={busy}>
+        <Button
+          type="submit"
+          size="sm"
+          disabled={busy || quotaFull}
+          aria-busy={busy}
+        >
           {busy ? "Uploading…" : "Upload"}
         </Button>
       </div>

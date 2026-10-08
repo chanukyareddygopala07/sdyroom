@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatBytes } from "@/lib/resources/files";
+import type { ResourceQuota } from "@/lib/resources/quota";
 import type { StudyResource } from "@/lib/resources/types";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -79,6 +80,7 @@ function SkeletonRows({ count }: { count: number }) {
 export function ResourceLibrary({
   scope,
   initialResources,
+  quota,
   idPrefix,
   heading,
   description,
@@ -86,6 +88,8 @@ export function ResourceLibrary({
 }: {
   scope: ResourceScope;
   initialResources: StudyResource[];
+  /** Storage quota for this scope; `null` when the numbers could not be read. */
+  quota: ResourceQuota | null;
   idPrefix: string;
   heading: string;
   description: string;
@@ -280,6 +284,7 @@ export function ResourceLibrary({
       <ResourceUploadForm
         scope={scope}
         idPrefix={idPrefix}
+        quota={quota}
         onUploaded={(resource) => {
           setNotice(`Uploaded “${resource.title}”.`);
           setResources((current) => [resource, ...current]);

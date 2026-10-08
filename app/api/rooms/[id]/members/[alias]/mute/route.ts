@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { emptyBodyResponse, errorResponse, readEmptyBody, readJsonBody, validationResponse } from "@/lib/api/responses";
+import { rateLimitedResponse } from "@/lib/rate-limit/check";
+import { muteSpec } from "@/lib/rate-limit/keys";
 import { ModerationError } from "@/lib/moderation/errors";
 import { muteMember, unmuteMember } from "@/lib/moderation/queries";
 import {
@@ -32,6 +34,7 @@ type MuteContext = {
  * | 403 | `{ "error": { "code": "not_moderator" } \| { "code": "cannot_mute_owner" } \| { "code": "cannot_mute_moderator" } \| { "code": "cannot_mute_self" } }` |
  * | 404 | `{ "error": { "code": "not_found" } }` — missing room, non-member, unknown alias, or caller lacks rights |
  * | 409 | `{ "error": { "code": "already_muted" } \| { "code": "not_muted" } }` |
+ * | 429 | `{ "error": { "code": "rate_limited" } }` |
  * | 500 | `{ "error": { "code": "moderation_failed" } }` |
  */
 export async function POST(request: NextRequest, { params }: MuteContext) {
@@ -48,6 +51,15 @@ export async function POST(request: NextRequest, { params }: MuteContext) {
     return errorResponse("validation", "That room id is not valid.", 400, [
       { path: "id", message: "Room id must be a UUID." },
     ]);
+  }
+
+  const limited = await rateLimitedResponse(
+    supabase,
+    muteSpec(parsedRoomId.data, data.claims.sub),
+    "Too many mute changes — wait a while and try again.",
+  );
+  if (limited) {
+    return limited;
   }
 
   const parsedAlias = memberAliasSchema.safeParse(alias);
@@ -123,6 +135,15 @@ export async function DELETE(request: NextRequest, { params }: MuteContext) {
     return errorResponse("validation", "That room id is not valid.", 400, [
       { path: "id", message: "Room id must be a UUID." },
     ]);
+  }
+
+  const limited = await rateLimitedResponse(
+    supabase,
+    muteSpec(parsedRoomId.data, data.claims.sub),
+    "Too many mute changes — wait a while and try again.",
+  );
+  if (limited) {
+    return limited;
   }
 
   const parsedAlias = memberAliasSchema.safeParse(alias);
