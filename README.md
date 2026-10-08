@@ -301,7 +301,61 @@ SdyRoom follows a **Next.js + Supabase architecture** with authorization enforce
 
 <div align="center">
 
-<img src="docs/images/architecture.png" alt="SdyRoom system architecture" width="950" />
+                         ┌─────────────────────────┐
+                         │        SdyRoom          │
+                         │      Web Client         │
+                         │  Next.js + React + TS    │
+                         └────────────┬────────────┘
+                                      │
+                         HTTPS / Server Actions
+                                      │
+                                      ▼
+                    ┌──────────────────────────────┐
+                    │       Next.js Application    │
+                    │                              │
+                    │  App Router                  │
+                    │  Server Components           │
+                    │  API Routes                  │
+                    │  Validation / Auth Checks    │
+                    └──────────────┬───────────────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+                    ▼              ▼              ▼
+             ┌───────────┐  ┌────────────┐  ┌──────────────┐
+             │ Supabase  │  │ PostgreSQL │  │ Supabase     │
+             │   Auth    │  │ Database   │  │ Storage      │
+             └───────────┘  └─────┬──────┘  └──────────────┘
+                                   │
+                                   ▼
+                         ┌──────────────────┐
+                         │ Row Level        │
+                         │ Security (RLS)   │
+                         └────────┬─────────┘
+                                  │
+             ┌────────────────────┼────────────────────┐
+             ▼                    ▼                    ▼
+       ┌───────────┐       ┌────────────┐       ┌────────────┐
+       │  Profiles │       │   Rooms    │       │ Membership │
+       └───────────┘       └────────────┘       └────────────┘
+                                  │
+                                  ▼
+                         ┌──────────────────┐
+                         │ Study Resources │
+                         │ & Sessions      │
+                         └──────────────────┘
+
+                         ───────────────────
+                         Quality & Delivery
+                         ───────────────────
+
+              GitHub Actions → Tests → Lint → Typecheck
+                                      │
+                                      ▼
+                                  Production
+                                      │
+                                      ▼
+                                   Vercel
 
 </div>
 
