@@ -312,9 +312,10 @@ docs/local-supabase.md (bucket settings), docs/milestones.md
       emits a URL or token — verified by search).
 - [x] The shared rate-limit keys are documented so PRs 07/09/11 use them
       (`docs/API_CONTRACTS.md` → "Rate limits (PR 10)").
-- [ ] All three suites + build green locally and in CI. *(local: lint, types,
-      778 unit / 265 integration / 38 e2e; CI ticked after the green run — see
-      the PR's closing commit.)*
+- [x] All three suites + build green locally and in CI. *(local: lint, types,
+      778 unit / 60 files, 265 integration / 15 files, 38 e2e / 11 specs after a
+      fresh `db reset`; CI: quality 1m13s, integration 4m4s, e2e 6m40s on
+      [run 37756407810](https://github.com/chanukyareddygopala07/sdyroom/actions/runs/37756407810).)*
 
 ### Definition of Done
 
@@ -324,7 +325,8 @@ docs/local-supabase.md (bucket settings), docs/milestones.md
    verified to reject an oversized put independently of the app (integration
    test pushes 20 MiB + 1 byte straight at storage — refused by
    `file_size_limit`, nothing written).
-3. [ ] CI green on all three jobs.
+3. [x] CI green on all three jobs (quality 1m13s, integration 4m4s, e2e 6m40s
+   on [run 37756407810](https://github.com/chanukyareddygopala07/sdyroom/actions/runs/37756407810)).
 4. [x] `docs/API_CONTRACTS.md` has explicit limit/quota/rate rows (the upload
    sequence section updated with the compensating-delete step);
    `docs/SECURITY.md` gains an upload abuse row; `docs/local-supabase.md`
