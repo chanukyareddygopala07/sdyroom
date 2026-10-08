@@ -53,37 +53,37 @@ Level Security, Storage, Realtime).
 
 <a name="features"></a>
 
-## ✨ Features
+##  Features
 
-### ✅ Implemented
+###  Implemented
 
-- 🔑 Password authentication with cookie sessions (`@supabase/ssr`) and a one-time
+-  Password authentication with cookie sessions (`@supabase/ssr`) and a one-time
   study-alias onboarding
-- 🔍 Public room discovery with `?q=` search over name, subject and exam track
-- 🚪 Capacity-limited rooms (1–100 seats), public/private and open/closed, with
+-  Public room discovery with `?q=` search over name, subject and exam track
+-  Capacity-limited rooms (1–100 seats), public/private and open/closed, with
   owner-only settings and type-the-name deletion
 - ⏱ Shared focus sessions: an owner-driven timer state machine in Postgres, synced
   in realtime, with history and server-persisted expiry
-- 🎯 Personal goals that stay private even from the room owner
-- 💬 Realtime room chat: append-only, cursor-paginated, RLS-filtered at delivery
-- 📍 Live presence on the roster (who is in the room / studying)
-- 📨 Alias-addressed invitations with an inbox — no invite links to forward or
+-  Personal goals that stay private even from the room owner
+-  Realtime room chat: append-only, cursor-paginated, RLS-filtered at delivery
+-  Live presence on the roster (who is in the room / studying)
+-  Alias-addressed invitations with an inbox — no invite links to forward or
   enumerate
-- 📁 Study resources: personal library + room sharing, magic-byte validation,
+-  Study resources: personal library + room sharing, magic-byte validation,
   20 MiB ceiling, 300-second signed downloads, storage quotas, rate limits and
   orphan cleanup
-- 🛡 Member safety: reports, one-way blocks, mutes, member removal, owner-appointed
+-  Member safety: reports, one-way blocks, mutes, member removal, owner-appointed
   room moderators, and a moderation inbox that never shows the reporter
-- 🌗 Light and dark themes
+- Light and dark themes
 
-### 🚧 In Review
+###  In Review
 
 Nothing is in review right now — the next candidates are listed under
 [Planned](#planned) and the [Roadmap](#roadmap).
 
 <a name="planned"></a>
 
-### 🔮 Planned
+###  Planned
 
 The ordered plan lives in [`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) and
 [`docs/milestones.md`](docs/milestones.md); highlights:
@@ -99,7 +99,7 @@ The ordered plan lives in [`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) and
 
 <a name="demo"></a>
 
-## 🖥️ Screenshots & Demo
+##  Screenshots & Demo
 
 No screenshots or demo recordings are checked in yet, and this repository does not
 host a public deployment — so there is no live demo link to click. Run it locally
@@ -111,7 +111,7 @@ instead: [Getting Started](#getting-started).
 
 <a name="architecture"></a>
 
-## 🏗️ Architecture
+##  Architecture
 
 Two rules describe the whole design (from
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)):
@@ -255,7 +255,7 @@ For the full directory map, data model (14 tables) and where decisions live, rea
 
 <a name="security"></a>
 
-## 🔐 Security
+##  Security
 
 - **Server-side auth gates**: pages are session-gated (middleware redirect for
   browsers, JSON `401` for APIs); every room endpoint re-checks membership, and a
@@ -284,7 +284,7 @@ Read the threat model, security coverage and known limitations in
 
 <a name="technology"></a>
 
-## 🛠️ Technology
+##  Technology
 
 | Layer | Choice |
 | --- | --- |
@@ -362,7 +362,7 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
 
 <a name="testing"></a>
 
-## 🧪 Testing
+##  Testing
 
 Current suite: **778 unit** (60 files), **265 integration** (15 files), **38 e2e**
 (11 specs).
@@ -424,12 +424,12 @@ open a pull request.
 
 <a name="roadmap"></a>
 
-## 🗺️ Roadmap
+##  Roadmap
 
 | Status | PRs |
 | --- | --- |
-| ✅ Merged | #1–#10 — chat, realtime, focus sessions & goals, room discovery, resources, presence, invitations & roster, room management, member safety, resource security |
-| ⏳ Pending | #11–#21 — notifications, AI study assistance, richer discovery, production hardening, mobile & accessibility, profile/settings, coverage gates |
+|  Merged | #1–#10 — chat, realtime, focus sessions & goals, room discovery, resources, presence, invitations & roster, room management, member safety, resource security |
+|  Pending | #11–#21 — notifications, AI study assistance, richer discovery, production hardening, mobile & accessibility, profile/settings, coverage gates |
 
 Details, order and acceptance criteria:
 [`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) ·
@@ -438,7 +438,7 @@ Details, order and acceptance criteria:
 
 <a name="getting-started"></a>
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 
@@ -501,7 +501,7 @@ commands.
 
 <a name="documentation"></a>
 
-## 📚 Documentation
+##  Documentation
 
 | Document | What it answers |
 | --- | --- |
@@ -517,7 +517,7 @@ commands.
 | [SECURITY.md](SECURITY.md) | How to report a vulnerability |
 | [docs/images/README.md](docs/images/README.md) | Screenshot and demo asset conventions |
 
-## 🧭 Application & API
+##  Application & API
 
 SdyRoom is a minimal working application on top of this starter: sign up, pick a
 unique study alias once, then discover public rooms and create your own.
@@ -606,7 +606,7 @@ together, `docs/API_CONTRACTS.md` holds the endpoint contracts and
 
 <a name="contributing"></a>
 
-## 🤝 Contributing
+##  Contributing
 
 Contributions are welcome. Start with
 [`CONTRIBUTING.md`](CONTRIBUTING.md) — it covers the environment setup, the exact
