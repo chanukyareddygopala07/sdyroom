@@ -93,6 +93,12 @@ and **no** table grant at all on reports, actions or moderators. Every
 privileged mutation writes one `moderation_actions` audit row in the same
 transaction, so the audit trail exists only as a side effect of the action it
 describes.
+`supabase/migrations/0010_resource_hardening.sql` adds upload abuse protection:
+one counter table (`rate_limits`), four functions (`rate_limit_take`,
+`resource_quota_ok`, `resource_quota`, `study_resources_quota_guard`), one
+BEFORE INSERT trigger on `study_resources`, and execute-grant hygiene — and
+**no new policy anywhere** (the limiter's table is closed by grants *and* by
+RLS-with-zero-policies instead).
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
@@ -109,6 +115,7 @@ describes.
 | `room_moderators` | `room_id` → `rooms`, `user_id` → `auth.users`, `granted_by`, `created_at`, PK `(room_id, user_id)` | Owner-appointed, room-scoped moderator grants — the *only* moderator concept in the schema (no global role exists). Zero grants; read inside the definer functions, cascade away with the room or the account. |
 | `room_mutes` | `room_id`, `user_id`, `muted_until`, `muted_by`, `created_at`, unique `(room_id, user_id)` | One live mute per member per room (`0009`). Uniqueness is **total**, not partial: a `where muted_until > now()` predicate would not be immutable, so the RPC sweeps expired rows before inserting instead. `SELECT` for `authenticated` (the `room_messages` INSERT policy subquery needs it) plus an own-row policy; writes are RPC-only. |
 | `user_blocks` | `blocker_id` → `auth.users`, `blocked_id` → `auth.users`, `created_at`, PK `(blocker_id, blocked_id)`, CHECK `blocker_id <> blocked_id` | One-directional blocks (`0009`): visible to the blocker only, neither side notified. `SELECT` for `authenticated` (the `room_messages` SELECT policy filters on it) plus an own-row policy; writes are RPC-only. |
+| `rate_limits` | `key` (PK), `window_start`, `count` | Fixed-window counters for the shared limiter (`0010`). **Zero grants and zero policies for every role** — the only writer and reader is the `rate_limit_take` SECURITY DEFINER RPC, so a direct PostgREST access dies on `42501` before RLS is even consulted, and a hypothetical future grant would still be filtered to nothing by the policy-free table. |
 
 No sample rooms and no fabricated auth users are inserted by SQL: `supabase/seed.sql`
 is intentionally empty, and local test data is made only through the Auth API and the
@@ -131,6 +138,15 @@ Grants are explicit and column-aware (`auto_expose_new_tables = false` in
 | `anon` | none | none | none | none | none | none | none | none | none | none | none | none | none |
 | `authenticated` | `SELECT/INSERT` on `(id, alias, exam_targets, created_at)`, `UPDATE` on `(alias, exam_targets)` | `SELECT`, `INSERT` | `SELECT`, `INSERT` | `SELECT` | `SELECT`, `INSERT`, `DELETE`, `UPDATE (title, target_seconds, target_count, status)` | `SELECT`, `INSERT` | `SELECT` / `INSERT` / `UPDATE (title, subject, chapter)` / `DELETE`, each on an explicit column list — **never `owner_id`** | `SELECT` (whole table — the policy reads `inviter_id`/`invitee_id`, and Postgres checks privileges on every column a policy touches); **no write verb at all** | **none** | **none** | **none** | `SELECT` | `SELECT` |
 | `service_role` | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges | no data privileges |
+
+`rate_limits` (`0010`) is deliberately absent from that table: it holds **no
+grant for any role at all**. What it exposes instead is execute privilege on
+functions: `rate_limit_take(text, integer, interval)`, `resource_quota_ok` and
+`resource_quota` are executable by `authenticated` only (revoked from
+`anon`/`public`), and `study_resources_quota_guard()` — the trigger function —
+by no application role whatsoever (PostgreSQL fires triggers without an
+EXECUTE check, so the quota guard runs for every insert while nothing can call
+it directly).
 
 **No `UPDATE` or `DELETE` grant on `rooms` / `room_members` — and since `0008`
 that is a deliberate design, not an undeveloped flow.** Room edits and deletion go
@@ -207,6 +223,7 @@ rows.
 | `moderation_reports`, `moderation_actions`, `room_moderators` | none (`0009`) | deny-by-default twice: zero policies on top of zero grants. Every read and write is a definer RPC, so there is deliberately nothing for a policy to permit |
 | `room_mutes` | `room_mutes_select_own` (`0009`) | `user_id = auth.uid()` only — the table-level `SELECT` exists for the chat policy's subquery, and this policy keeps the direct read scoped to the caller's own mute rows |
 | `user_blocks` | `user_blocks_select_own` (`0009`) | `blocker_id = auth.uid()` only — the same reasoning as `room_mutes`; the blocked side never sees the row that names them |
+| `rate_limits` | none (`0010`) | RLS enabled with **zero policies**: even if a grant ever appeared, every read and write would be filtered to nothing. `tests/integration/resource-hardening.test.ts` widens the grant inside the test and observes exactly that (`select` → 0 rows, `insert` → row-level security refusal), then revokes and re-checks `has_table_privilege` = `f` |
 | `realtime.messages` | `room_presence_select_member` / `room_presence_insert_member` (`0006`) | the whole of the private-channel gate for `room-presence-{uuid}` topics: `authenticated` only, extension must be `broadcast`/`presence`, and the uuid in the topic must match a current `room_members` row for `auth.uid()` — so a non-member (or an anonymous client) cannot join, cannot confirm a private room exists, and cannot read another room's roster. Realtime's authorization probes run as the caller inside a transaction that rolls back, so nothing is ever written |
 
 Storage objects have their own four policies (next section); they are not listed
@@ -227,6 +244,13 @@ already has it):
 | Bucket | `public` | `file_size_limit` | `allowed_mime_types` |
 | --- | --- | --- | --- |
 | `study-resources` | **false** | 20 971 520 (20 MiB) | `application/pdf`, `image/png`, `image/jpeg`, `text/plain`, `text/markdown` |
+
+The bucket's two limits are belt-and-braces under the API's own checks: the
+route refuses on `content-length` before the body is buffered and sniffs the
+bytes after parsing, and storage independently refuses any put that slips past
+either. Per-user and per-room byte budgets are **not** a bucket setting (a
+bucket cannot know which student is uploading) — they live in `0010` and are
+enforced by the `study_resources_quota_guard` BEFORE INSERT trigger.
 
 There is no code path that produces a permanent URL for these bytes.
 
@@ -440,26 +464,57 @@ Every one of the mutating functions writes its `moderation_actions` row in the
 same transaction as the action, so an action without an audit row (or vice
 versa) cannot be committed.
 
+## Rate limits, quotas and orphan cleanup (`0010_resource_hardening.sql`)
+
+The three abuse controls PR 10 adds are all table-side, so they behave the
+same on one dev machine and on many app instances — the counter *is* the
+database.
+
+| Object | Behaviour |
+| --- | --- |
+| `rate_limits(key, window_start, count)` | Fixed-window counter. **No grant, no policy, RLS on** — closed twice; only `rate_limit_take` touches it. |
+| `rate_limit_take(p_key, p_max, p_window) → boolean` | SECURITY DEFINER, `search_path = ''`, execute `authenticated` only. One `INSERT … ON CONFLICT` upsert: atomic across instances, rejects `p_max < 1`/`p_window <= 0` with `22023`, returns `true` while `count <= p_max` and `false` once over — a take at `count = p_max` still allows (the *next* caller is refused), and a stale window restarts at 1. |
+| `resource_quota_ok(p_room_id, p_add_bytes) → boolean` | SECURITY DEFINER pre-check the upload route calls *before* the bytes are written; **fails open** (an error is logged and `true` returned) because the trigger below is the authority. |
+| `resource_quota(p_room_id) → jsonb` | SECURITY DEFINER display read for `GET /api/resources`: `{ scope, used_bytes, limit_bytes, user_used_bytes, user_limit_bytes }` from `coalesce(sum(size_bytes), 0)` — personal scope sums the caller's rows, room scope sums the room's. |
+| `study_resources_quota_guard()` | BEFORE INSERT trigger on `study_resources`, executable by no application role. Re-checks both budgets **inside the inserting transaction** under `hashtextextended` advisory locks (user first, then room — a fixed order, so two racing uploads serialize instead of deadlocking) and raises `P0001` / `quota_exceeded`, which the route maps to `409` and rolls the just-written object back with the row. Limits: 1 GiB per user, 500 MiB per room (`v_user_limit` / `v_room_limit`, the single place to change them). |
+
+Rate windows (published in `docs/API_CONTRACTS.md`, implemented in
+`lib/rate-limit/keys.ts`): upload 20/min per user and 10/min per target,
+delete 30/min, signed URL 120/min, sweep 5/min; reports 20/hour, blocks and
+mutes 30/hour, invitations 10/hour. The limiter **fails open** by design
+(`lib/rate-limit/check.ts`): only an explicit `false` refuses, and a database
+hiccup is logged rather than turned into an outage.
+
+The sweep itself is a route, not SQL — `POST /api/resources/cleanup`
+(`app/api/resources/cleanup/route.ts`) — because SQL cannot call the Storage
+API: the route lists objects under the caller's own prefix, compares them
+against rows selected by `storage_path LIKE '<prefix>/%'`, removes orphan
+objects first and broken rows second, and skips anything younger than a 60 s
+grace period in both directions.
+
 ## Verification performed
 
 All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001 … 0009
-npx supabase migration list --local # 0001 … 0009 present locally
+npx supabase db reset               # exit 0: applied 0001 … 0010
+npx supabase migration list --local # 0001 … 0010 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
 
-- RLS enabled on all thirteen tables: `profiles`, `rooms`, `room_members`,
+- RLS enabled on all fourteen tables: `profiles`, `rooms`, `room_members`,
   `focus_sessions`, `study_goals`, `room_messages`, `study_resources`,
   `room_invitations`, `moderation_reports`, `moderation_actions`,
-  `room_moderators`, `room_mutes`, `user_blocks` (`relrowsecurity = t`).
+  `room_moderators`, `room_mutes`, `user_blocks`, `rate_limits`
+  (`relrowsecurity = t`).
 - 23 table policies on `public.*`, every one `to authenticated` (the 21st was
   `room_invitations_select_addressed` from `0007`; `0009` added
   `room_mutes_select_own` and `user_blocks_select_own` and re-created
-  `room_messages`' two policies in place, so the count moves 21 → 23); plus
+  `room_messages`' two policies in place, so the count moves 21 → 23;
+  **`0010` adds none** — `rate_limits` is closed by zero grants plus
+  zero policies instead); plus
   the two `0006` policies on `realtime.messages` (`room_presence_select_member`
   / `room_presence_insert_member`) and the 4 storage policies on
   `storage.objects` for `study-resources` (`0005`'s three plus
@@ -591,6 +646,23 @@ Member safety (`0009_moderation.sql`), covered end to end by
 | Cross-room isolation | reports, audit rows and moderator grants of room A never appear in room B's inbox; the same caller acting across rooms gets per-room results only |
 | Grant / audit freezes | `moderation_reports`/`moderation_actions`/`room_moderators`: zero grants for `anon`/`authenticated`/`service_role` and zero policies; `room_mutes`/`user_blocks`: `SELECT` only with own-row policies; the eight-value action enum pinned by checksum; exactly one audit row per action |
 | Control violation (rolled back) | widening a grant and dropping the policy **inside a transaction** lets a direct insert through, proving both layers are load-bearing — the transaction rolls back and the posture is re-verified `f` immediately after |
+
+Rate limits, quotas and the sweep (`0010_resource_hardening.sql`), verified on
+`npx supabase db reset` from scratch and covered end to end by
+`tests/integration/resource-hardening.test.ts` (25 tests) and
+`tests/e2e/resource-hardening.spec.ts` (5 tests):
+
+| Requirement | Result |
+| --- | --- |
+| Grants | `rate_limits`: zero for `anon`/`authenticated`/`service_role`; `rate_limit_take` / `resource_quota_ok` / `resource_quota`: anon `f`, authenticated `t`, `search_path = ""`; `study_resources_quota_guard()`: executable by no API role |
+| Anonymous execute | `set role anon; select rate_limit_take(...)` → `permission denied` |
+| Atomic take | `p_max: 2` → `true, true, false` (count 3); backdating `window_start` restarts at 1; six simultaneous takes for `p_max: 2` land exactly two `true`; `p_max: 0` → `22023` |
+| Two closed doors | with `select, insert` granted back inside the test: `select` returns **0 rows** (RLS, no policy) and `insert` is refused "row-level security"; after the revoke, both die on `42501` again |
+| Quota trigger | direct `psql` insert sized to cross the limit → `P0001 quota_exceeded`, zero rows committed; two racing API uploads (one byte of headroom) → exactly one `201`, one `409`, one object, one row; deleting a row drops the sum immediately and the next upload succeeds |
+| Quota display | `GET /api/resources` `quota` matches `sum(size_bytes)` read straight from the table, for both personal and room scope |
+| Sweep | backdated object with no row → removed; fresh object → skipped (60 s grace); foreign user's objects untouched; broken row (object gone) → removed; a live row with its object → kept; non-member room sweep → `404` |
+| Upload guards | 20 MiB + 1 byte → `413` with no object and no row; `.exe` → `415`, likewise nothing written; the same 20 MiB + 1 byte pushed **straight at storage** (no app route) → refused by the bucket's `file_size_limit` and nothing written |
+| Serve review | the signed download URL carries `&download=<original name>` → the asset answers `200` with `Content-Disposition: attachment; filename="class notes.pdf"` and `Expires` exactly 300 s after `Date`; the listing payload contains neither the URL nor a `token=` |
 
 ## Notes and risks
 

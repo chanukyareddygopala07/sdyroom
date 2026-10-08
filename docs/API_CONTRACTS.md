@@ -176,6 +176,15 @@ viewer may already read through RLS.
 | `MAX_CHAPTER_CHARS` | 80 |
 | `MAX_FILENAME_CHARS` | 255 |
 | `DOWNLOAD_TTL_SECONDS` | 300 |
+| `SWEEP_GRACE_MS` | `60_000` — orphans younger than this are never swept |
+
+Storage quotas (constants inside `0010_resource_hardening.sql`, not TS
+constants — the database is the single source of truth):
+
+| Quota | Value |
+| --- | --- |
+| Per user (every file the caller owns, personal and shared) | 1 GiB (`1 073 741 824` bytes) |
+| Per room (every file shared with that room) | 500 MiB (`524 288 000` bytes) |
 
 | Declared type | Magic bytes checked at offset 0 | Extensions accepted |
 | --- | --- | --- |
@@ -218,11 +227,33 @@ Passing both `scope` and `room_id` is a `400`.
 
 | Status | Body |
 | --- | --- |
-| 200 | `{ "resources": [Resource], "limit": n, "offset": n, "has_more": bool }` |
+| 200 | `{ "resources": [Resource], "quota": {…}, "limit": n, "offset": n, "has_more": bool }` |
 | 400 | `{ "error": { "code": "validation" } }` |
 | 401 | `{ "error": { "code": "unauthenticated" } }` |
 | 404 | `{ "error": { "code": "not_found" } }` — `room_id` names a missing room or one the caller is not a member of (a malformed `room_id` is the `400` above) |
 | 500 | `{ "error": { "code": "resources_failed" } }` |
+
+`quota` is the byte budget for the scope being listed:
+
+```json
+{
+  "scope": "user",
+  "used_bytes": 4194304,
+  "limit_bytes": 1073741824,
+  "user_used_bytes": 4194304,
+  "user_limit_bytes": 1073741824
+}
+```
+
+`scope` is `user` for `scope=personal` and `room` for `room_id=…`;
+`used_bytes` / `limit_bytes` describe that scope, and the `user_*` pair always
+describes the caller's personal budget (identical to the first pair on a
+personal listing, so the UI can render one line either way). Limits come from
+migration `0010`: **1 GiB per user, 500 MiB per room**. The API answers `500`
+if the quota query fails — never a partial `200`. The library *page* treats
+the quota as display-only: it catches the same failure, renders without the
+"X of Y used" line and without locking the form, and leaves enforcement to
+the upload route and the database trigger.
 
 Ordering is `created_at DESC, id DESC`. `has_more` compares `offset +
 resources.length` against an exact row count of the whole filtered scope (RLS
@@ -247,21 +278,35 @@ applied), so a final page shorter than `limit` still reports `false`.
 `400 invalid_request` with the offending field names. Identity always comes
 from the session, so a forged owner id can never be honoured.
 
-**Server-side sequence**
+**Server-side sequence** (abuse controls first, in cost order)
 
 1. Authenticate (`401` first, before any validation detail is revealed).
 2. Refuse a `content-length` over 20 MiB + 256 KiB of multipart envelope with
    `413`, before the body is buffered.
-3. Parse the multipart body (not multipart at all → `400 invalid_request`).
-4. Reject unknown parts, a missing/oversized `file`, and bad metadata with Zod.
-5. Validate size, filename shape and magic bytes; derive `content_type`.
-6. If `room_id` is present, confirm current room membership (`404` otherwise).
-7. Generate the resource UUID and a storage path built **only** from trusted
+3. Consume the caller's overall upload slot — `upload:user:{id}`, 20 per
+   60 s — and answer `429 rate_limited` (+`Retry-After: 60`) before a single
+   byte of multipart is parsed.
+4. Parse the multipart body (not multipart at all → `400 invalid_request`).
+5. Reject unknown parts, a missing/oversized `file`, and bad metadata with Zod;
+   validate size, filename shape and magic bytes; derive `content_type`.
+6. Consume the target's slot — `upload:{room|personal}:{id}`, 10 per 60 s —
+   now that the body has revealed which library this upload is aimed at.
+7. If `room_id` is present, confirm current room membership (`404` otherwise).
+8. Quota pre-check (`resource_quota_ok`): an over-limit upload is `409
+   quota_exceeded` before anything is written. This check *fails open* — an
+   error reading the total is logged and the upload proceeds, because step 10
+   is the authority.
+9. Generate the resource UUID and a storage path built **only** from trusted
    values: `personal/{owner}/{id}{ext}` or `rooms/{room}/{owner}/{id}{ext}`.
-8. Upload to the private `study-resources` bucket.
-9. Insert the metadata row with the same id and path.
-10. If step 9 fails, remove the object from step 8 and answer `500` with a safe
-    message.
+10. Upload to the private `study-resources` bucket.
+11. Insert the metadata row with the same id and path. The
+    `study_resources_quota_guard` trigger re-decides the quota inside this
+    inserting transaction (under per-user and per-room advisory locks), so
+    racing uploads resolve to exactly one winner; a refusal raises
+    `quota_exceeded`, which the route answers as `409`.
+12. If step 11 fails, remove the object from step 10 and answer `500` with a
+    safe message (or `409` when the trigger refused — the object is removed in
+    either case).
 
 **Responses**
 
@@ -275,8 +320,10 @@ from the session, so a forged owner id can never be honoured.
 | 400 | `malformed_file` | Signature does not match the declared type, or text is not valid UTF-8 |
 | 401 | `unauthenticated` | No session |
 | 404 | `not_found` | `room_id` names a missing room or one the caller has left |
+| 409 | `quota_exceeded` | The upload would cross the caller's 1 GiB or the room's 500 MiB budget |
 | 413 | `file_too_large` | Over 20 MiB |
 | 415 | `unsupported_file_type` | Extension/signature not in the allow list |
+| 429 | `rate_limited` | The caller's or the target's upload window is spent (`Retry-After: 60`) |
 | 500 | `storage_upload_failed` | Storage refused the object |
 | 500 | `metadata_failed` | Row insert failed after the object was written (object is removed first) |
 
@@ -295,12 +342,23 @@ never issued to an unauthorized caller.
 | 400 | `{ "error": { "code": "validation" } }` — `:id` is not a UUID |
 | 401 | `{ "error": { "code": "unauthenticated" } }` |
 | 404 | `{ "error": { "code": "not_found" } }` — missing, deleted, or not visible to the caller |
+| 429 | `{ "error": { "code": "rate_limited" } }` — 120 signed URLs per 60 s (`Retry-After: 60`) |
 | 500 | `{ "error": { "code": "download_failed" } }` |
 
 `url` is absolute on the configured Supabase API origin (the origin comes from
 `NEXT_PUBLIC_SUPABASE_URL`, never from the request), so the browser can open it
 directly. An expired token produces `403` from the storage service at fetch time;
 the client is expected to re-request a fresh URL rather than reuse the old one.
+
+The URL carries `&download=<original filename>` (single URL-encoded, appended
+after signing — the signature covers the object, not this flag), so the storage
+service answers the fetch with
+`Content-Disposition: attachment; filename="…"`, `Expires` exactly 300 s after
+`Date`, and `X-Robots-Tag: none`. Files in this app are downloaded, never
+rendered from the storage origin; that disposition is also why the missing
+`X-Content-Type-Options` header (which the storage origin does not send) is
+accepted as a documented limitation in `docs/SECURITY.md`. The URL appears only
+in this response — listings never embed one.
 
 ---
 
@@ -332,8 +390,46 @@ request), then the storage object is removed, then the metadata row.
 | 400 | `{ "error": { "code": "validation" } }` |
 | 401 | `{ "error": { "code": "unauthenticated" } }` |
 | 404 | `{ "error": { "code": "not_found" } }` — not yours, or already gone |
+| 429 | `{ "error": { "code": "rate_limited" } }` — 30 deletions per 60 s (`Retry-After: 60`) |
 | 500 | `{ "error": { "code": "delete_failed" } }` |
 | 500 | `{ "error": { "code": "cleanup_failed" } }` |
+
+---
+
+### `POST /api/resources/cleanup`
+
+Sweeps **the caller's own key prefix** for orphaned bytes, repairing both
+failure directions an interrupted upload can leave behind:
+
+- **Object with no row** — a crash between the object put and the row insert.
+  Nothing can ever sign a URL for it (the bucket is private and reads are
+  row-driven), so it is removed.
+- **Row with no object** — the object vanished out of band. The row advertises
+  a download that can never succeed, so it is removed.
+
+| Body | Scope |
+| --- | --- |
+| `{}` (or no body) | `personal/{caller}/**` |
+| `{ "room_id": "<uuid>" }` | `rooms/{room}/{caller}/**` — the caller's uploads in that room; membership is proven first |
+
+Everything younger than `SWEEP_GRACE_MS` (60 s) is skipped in both
+directions — an upload that is mid-flight (object written, row not yet
+inserted) is never mistaken for an orphan. The comparison is restricted to
+the caller's own prefix on both sides: `storage_path LIKE 'personal/{id}/%'`
+(and the storage DELETE policy's `owner = auth.uid()`) mean a sweep can only
+ever touch files the caller uploaded; a member sweeping a room cleans their
+own contributions, never anyone else's. The route runs the sweep itself
+because SQL cannot call the Storage API. Rate limit: `cleanup:user:{id}`,
+5 per 60 s, taken *before* the body is read.
+
+| Status | Body |
+| --- | --- |
+| 200 | `{ "removed_objects": n, "removed_rows": n, "scope": "personal" \| "room", "room_id": uuid \| null }` |
+| 400 | `{ "error": { "code": "invalid_json" \| "invalid_request" \| "validation" } }` |
+| 401 | `{ "error": { "code": "unauthenticated" } }` |
+| 404 | `{ "error": { "code": "not_found" } }` — `room_id` names a missing room or one the caller is not a member of |
+| 429 | `{ "error": { "code": "rate_limited" } }` (`Retry-After: 60`) |
+| 500 | `{ "error": { "code": "cleanup_failed" } }` — a listing failure aborts before anything is deleted (an incomplete view of the folder would make "not listed" a lie); rows are deleted in one statement; a retry is safe |
 
 ---
 
@@ -399,6 +495,7 @@ it). The alias is resolved inside the RPC.
 | 409 | `self_invite` | The owner invited themselves |
 | 409 | `already_member` | The alias already has a seat |
 | 409 | `already_invited` | A pending invitation for this (room, invitee) exists |
+| 429 | `rate_limited` | 10 invitations per 3600 s per (room, inviter) — `Retry-After: 3600` |
 | 500 | `invitation_create_failed` | |
 
 ### `GET /api/rooms/[id]/invitations`
@@ -495,7 +592,8 @@ identity is **never read from the body** — `create_moderation_report` pins
 `200 { "report": {…}, "duplicate": true }` (idempotent repeat of an open
 report by the same reporter on the same subject) · `400 validation` /
 `invalid_json` · `401` · `404 not_found` (non-member or unknown subject) ·
-`409 self_report` · `500 report_failed`.
+`409 self_report` · `429 rate_limited` (20 reports per 3600 s per reporter,
+per room — `Retry-After: 3600`) · `500 report_failed`.
 
 ### `GET /api/rooms/[id]/reports`
 
@@ -540,7 +638,9 @@ is RLS, and the API routes answer `404`.
 not_moderator`), then **self** (`cannot_mute_self` — so an owner cannot mute
 themselves), the owner (`cannot_mute_owner`) and other moderators
 (`cannot_mute_moderator`); an active mute is `409 already_muted`. `DELETE`
-lifts → `200 { "unmuted": true }`, or `409 not_muted`. The mute is enforced
+lifts → `200 { "unmuted": true }`, or `409 not_muted`. Both verbs share one
+window — 30 changes per 3600 s per (room, moderator) — and answer `429
+rate_limited` (`Retry-After: 3600`) when it is spent. The mute is enforced
 twice — in the RPC and in the `room_messages` INSERT policy — so a direct
 PostgREST insert cannot bypass it; the composer sees `403 muted` and the
 muted member's own page disables it up front.
@@ -561,7 +661,8 @@ Blocks are **private to the blocker**: `GET` only ever returns rows whose
 `POST { "alias" }` → `201 { "block": { "alias", "created_at" }, "created":
 true }`, repeat → `200 { …, "created": false }`, self-block → `409
 self_block`, unknown alias → `404`. `DELETE` → `200 { "removed": bool }`
-(idempotent).
+(idempotent). Both verbs share one window — 30 changes per 3600 s per user —
+and answer `429 rate_limited` (`Retry-After: 3600`) when it is spent.
 
 Blocking is enforced by one clause on the `room_messages` **SELECT** policy:
 the blocker stops receiving the target's messages — history, direct reads
@@ -579,10 +680,58 @@ messages and is told nothing.
 | 403 | `not_moderator` / `not_owner` / `cannot_remove_owner` / `cannot_remove_self` / `cannot_mute_owner` / `cannot_mute_moderator` / `cannot_mute_self` / `cannot_moderate_owner` / `muted` (chat send) | privesc or forbidden target; the room is already proven visible, so 403 leaks nothing |
 | 404 | `not_found` | room not visible, member or subject not in the room, report not visible to a non-moderator |
 | 409 | `self_report` / `self_block` / `already_muted` / `not_muted` / `invalid_transition` / `blocked` (invitation accept) | state conflicts; a duplicate report answers idempotent `200`, not 409 |
+| 429 | `rate_limited` | the route's shared window is spent — see "Rate limits" below |
 | 500 | `report_failed` / `moderation_failed` / `blocks_failed` | hygiene |
 
-Rate limiting is still **not implemented anywhere** (see below); PR 10 owns
-that mechanism, and these routes are listed in its remit.
+Every throttle in this document is one mechanism — see
+**[Rate limits](#rate-limits-pr-10)** for the key naming, the windows and the
+fail-open rule.
+
+---
+
+## Rate limits (PR 10)
+
+One mechanism serves every throttled route: the `rate_limits` table
+(`key`, `window_start`, `count`) and a single SECURITY DEFINER RPC,
+`rate_limit_take(key, max, window) returns boolean` — one `INSERT … ON
+CONFLICT` statement, so the counter is the database and behaves identically
+on one dev machine or many app instances. A route "takes" a slot for its key
+and proceeds only while the take returns `true`.
+
+- **Shape.** `429 { "error": { "code": "rate_limited", "message": "…" } }`
+  with a `Retry-After` header naming the window in seconds. Messages are
+  route-specific ("Too many uploads — wait about a minute and try again.").
+- **Fixed window** starting at the first take; the next take after the window
+  opens a fresh counter. Keys are opaque strings
+  (`route[:scope]:user-id`), so a new route adopts the mechanism without a
+  migration.
+- **Fails open.** If the limiter itself cannot be consulted the request is
+  allowed and the failure is logged: traffic shaping must not turn a database
+  hiccup into an outage, and the quota trigger and RLS guard correctness
+  regardless. Only an explicit `false` from the RPC refuses.
+- **Reads are not throttled.** Page loads and paginated listings stay
+  unbounded — their cost is bounded by pagination — while every state-changing
+  or storage-touching route above carries a window.
+- The table has **no grants and no RLS policies**: direct PostgREST access is
+  refused on privilege grounds before policy evaluation, and the app never
+  holds a key other than through the RPC.
+
+| Route(s) | Key | Max / window |
+| --- | --- | --- |
+| `POST /api/resources` (per-user ceiling, taken before the body) | `upload:user:{userId}` | 20 / 60 s |
+| `POST /api/resources` (per target, after the body names it) | `upload:{roomId\|personal}:{userId}` | 10 / 60 s |
+| `DELETE /api/resources/:id` | `resource_delete:user:{userId}` | 30 / 60 s |
+| `GET /api/resources/:id/download` | `download:user:{userId}` | 120 / 60 s |
+| `POST /api/resources/cleanup` | `cleanup:user:{userId}` | 5 / 60 s |
+| `POST /api/rooms/[id]/reports` | `report:{roomId}:{userId}` | 20 / 3600 s |
+| `POST /api/blocks` · `DELETE /api/blocks/[alias]` | `block:user:{userId}` | 30 / 3600 s |
+| `POST` / `DELETE` `…/members/[alias]/mute` | `mute:{roomId}:{userId}` | 30 / 3600 s |
+| `POST /api/rooms/[id]/invitations` | `invite:{roomId}:{userId}` | 10 / 3600 s |
+
+These numbers are part of the contract (`lib/rate-limit/keys.ts` is the
+implementation mirror); change both together. The per-user/per-target split on
+uploads means one account cannot do unbounded work overall, and cannot
+concentrate all of it on one room or library.
 
 ---
 
@@ -590,7 +739,7 @@ that mechanism, and these routes are listed in its remit.
 
 | Concern | Status |
 | --- | --- |
-| Rate limiting | **Not implemented.** No rate limiter exists anywhere in this app yet; adding one only for uploads would be inconsistent. Listed as a known limitation in `docs/SECURITY.md`. Invitation creation is bounded in the meantime by the one-pending-per-(room, invitee) index and the 1–168 h TTL bounds. |
+| Rate limiting | **Implemented for the routes listed in "Rate limits"** (PR 10): uploads, deletes, signed-URL issuance, sweeps, reports, blocks, mutes and invitations. Session-gated pages and paginated reads are deliberately unthrottled; anything PR 11 (notifications) adds should adopt the same `rate_limit_take` mechanism. |
 | Malware scanning | **Not implemented and not claimed.** Only signature/UTF-8 validation runs. |
 | Metadata editing (`PATCH`) | Not exposed. The `UPDATE` grant and policy exist and are exercised by the integration suite so the column set is provably narrow; no UI or endpoint needs renaming yet. |
 | Public/permanent file URLs | Never. Only short-lived signed URLs. |
