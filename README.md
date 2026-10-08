@@ -33,7 +33,7 @@
   <a href="#contributing"><strong>Contributing</strong></a>
 </p>
 
-## 🎯 What is SdyRoom?
+##  What is SdyRoom?
 
 SdyRoom is a study-together platform for students preparing for competitive and
 university examinations — JEE, NEET, GATE, semester exams and more. Sign up with a
@@ -618,7 +618,7 @@ the integration and e2e suites), and the pull-request checklist.
 
 <a name="license"></a>
 
-## 📜 License
+##  License
 
 Licensed under the [MIT License](LICENSE) — see the license file for details.
 
