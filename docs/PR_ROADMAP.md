@@ -6,7 +6,7 @@ implementation specification in [`docs/prs/`](prs/).
 
 > **These are specifications, not GitHub pull requests.** Nothing in
 > `docs/prs/` exists as a PR on the repository. As of this writing GitHub shows
-> **9 PRs merged (01–09), 1 open (PR #10)**. A spec becomes a PR only when a
+> **10 PRs merged (01–10), no open PRs**. A spec becomes a PR only when a
 > developer creates a branch and opens one.
 
 ---
@@ -78,7 +78,7 @@ first place a secret enters the project.
 
 ## 3. PR inventory
 
-12 remaining PRs: 9 of the 13 requested (10–18 — 06, 07, 08 and 09 have
+11 remaining PRs: 8 of the 13 requested (11–18 — 06, 07, 08, 09 and 10 have
 merged) plus 3 discovered during the audit (19–21). Each has a spec in
 `docs/prs/`.
 
@@ -88,7 +88,7 @@ merged) plus 3 discovered during the audit (19–21). Each has a spec in
 | 07 | Private room invitations + roster | [`PR-07`](prs/PR-07-private-invitations.md) | B (Cursor) | 06 | `0007` | Medium–Large | Merged — [PR #7](https://github.com/chanukyareddygopala07/sdyroom/pull/7) (`b4e1f33`) |
 | 08 | Room management (edit / close / delete) | [`PR-08`](prs/PR-08-room-management.md) | A | 07 | `0008` | Medium | Merged — [PR #8](https://github.com/chanukyareddygopala07/sdyroom/pull/8) (`61a99a0`) |
 | 09 | Moderation, reporting, blocking | [`PR-09`](prs/PR-09-moderation.md) | B | 07, chat | `0009` | Large | Merged — [PR #9](https://github.com/chanukyareddygopala07/sdyroom/pull/9) (`1be4633`) |
-| 10 | File & upload security hardening | [`PR-10`](prs/PR-10-resource-security.md) | B | merged main (05) | `0010` | Medium–Large | In review — [PR #10](https://github.com/chanukyareddygopala07/sdyroom/pull/10) (`feat/resource-security`) |
+| 10 | File & upload security hardening | [`PR-10`](prs/PR-10-resource-security.md) | B | merged main (05) | `0010` | Medium–Large | Merged — [PR #10](https://github.com/chanukyareddygopala07/sdyroom/pull/10) (`06cfea4`) |
 | 11 | Notifications | [`PR-11`](prs/PR-11-notifications.md) | A | 07, 09, 19, 20 | `0011` | Medium | Pending |
 | 12 | AI document processing foundation | [`PR-12`](prs/PR-12-ai-document-foundation.md) | B | merged main (05) | `0012` | Large | Pending |
 | 13 | Ask My Notes | [`PR-13`](prs/PR-13-ask-my-notes.md) | B | 12 | none | Large | Pending |
@@ -213,7 +213,7 @@ the percentages are honest ranges rounded to 5.
 | --- | --: | --: | --: | --- |
 | **Core platform** (auth, profiles, rooms, membership, focus, goals, chat, resources, CI) | 30% | **85%** | 15% | Everything runs and is tested; missing room lifecycle, alias editing, roster. |
 | **Collaboration** (presence, invites, moderation, notifications) | 20% | **65%** | 35% | Presence, invitations and moderation all shipped (06/07/09); notifications are unbuilt. |
-| **Resources** (private files, sharing, hardening, AI-readiness) | 15% | **70%** | 30% | Shipped, adversarially tested, and — with PR 10 in review — quota'd, rate-limited and self-cleaning; previews and AI ingestion remain. |
+| **Resources** (private files, sharing, hardening, AI-readiness) | 15% | **70%** | 30% | Shipped, adversarially tested, and — with PR 10 merged — quota'd, rate-limited and self-cleaning; previews and AI ingestion remain. |
 | **AI** | 15% | **0%** | 100% | No dependency, no schema, no endpoint. Specified, not built. |
 | **Safety / security** | 10% | **75%** | 25% | RLS/grants/validation are genuinely strong, moderation shipped (PR 09) and rate limiting shipped (PR 10); CSP, backups and monitoring remain (PR 18). |
 | **Production readiness** | 10% | **30%** | 70% | 1078 tests and 3 CI jobs; no coverage gate, monitoring, load tests or deployment. |
@@ -243,16 +243,16 @@ table over the headcount.
    otherwise clear — 06 through 09 have merged — so this is the next
    product-facing PR once the nav it mounts in exists.
 
-**PR 10 is in review** (`feat/resource-security`): rate limiting, quotas and
-orphan cleanup close the two limitations the repo used to document about
-itself; nothing else waits on it, but PR 12 should not start until it lands.
+**PR 10 has merged** (`feat/resource-security`, merge commit `06cfea4`): rate
+limiting, quotas and orphan cleanup closed the two limitations the repo used to
+document about itself; nothing was waiting on it, and PR 12 is now clear to
+start.
 
 **Full recommended order:**
 
 ```
 19 → 20 → 21 (Foundations, parallel with everything below)
 11 (Collaboration — 06 → 07 → 08 → 09 already merged)
-10 in review (Resources)
 12 → 13 → 14 → 16 → 15 (AI)
 17 (Discovery, after 06)
 18 (Launch, last)
@@ -264,8 +264,8 @@ itself; nothing else waits on it, but PR 12 should not start until it lands.
 
 | Question | Answer |
 | --- | --- |
-| **How many PRs remain?** | **12** (10–21): 10 in review, 11 pending. |
-| **Which can run in parallel?** | 19, 20, 21 (all three, any order); 11 follows once 19 + 20 land; 17 runs alongside 10–11 (06 already merged). |
+| **How many PRs remain?** | **11** (11–21): 11 pending. |
+| **Which can run in parallel?** | 19, 20, 21 (all three, any order); 11 follows once 19 + 20 land; 17 runs alongside 11 (06 already merged). |
 | **Which block AI?** | **12** is the gate for everything AI. 13/14/16/15 sit behind it in order. Nothing in the Collaboration lane blocks AI — the AI track only needs merged `main` (PR 05) plus, for the planner, 14 and 16. |
 | **Which block public launch?** | **18** (headers/CSP, monitoring, backups, load tests, a11y), **19** (mobile + a11y), **21** (coverage gate). 10 (rate limiting + orphan cleanup) and 09 (moderation) have landed, so the launch blockers are the PR 18 cluster plus the foundations; 06/07/08/11 are product-complete-ness, not launch-safety; 12–17 are post-launch-eligible. |
 | **Missing work found in the audit** | Member roster (folded into 07), responsive navigation + accessibility baseline (19), alias editing (20), coverage & untested auth flows (21), orphaned storage objects on user/room deletion (folded into 10), unused `profiles.exam_targets` column (20), `milestones.md` marking milestone I in progress (housekeeping was assigned to 21; corrected in this status sync). |

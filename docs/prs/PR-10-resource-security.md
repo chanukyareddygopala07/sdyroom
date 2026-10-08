@@ -1,6 +1,8 @@
 # PR 10 — Resource security hardening (size, content checks, quotas, cleanup)
 
-**Status:** in review — [PR #10](https://github.com/chanukyareddygopala07/sdyroom/pull/10) (`feat/resource-security`).
+**Status:** merged — [PR #10](https://github.com/chanukyareddygopala07/sdyroom/pull/10),
+merge commit `06cfea4` (2026-10-08). All suites and the build were green before
+the merge (`lint`, `tsc`, 778 unit, 265 integration, 38 e2e, `build`, `db lint`);
 **Owner:** Dev B (Cursor) · **Complexity:** Medium–Large · **Migration:** `0010_resource_hardening.sql`
 **Depends on:** nothing (parallel lane — starts any time after `origin/main`)
 
