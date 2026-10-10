@@ -1,6 +1,8 @@
 # PR 19 — Responsive shell, navigation and accessibility baseline
 
-**Status:** specification only — no GitHub PR exists.
+**Status:** implemented on `feat/responsive-accessibility` —
+[PR #13](https://github.com/chanukyareddygopala07/sdyroom/pull/13) (`b3acb0f`),
+in review.
 **Owner:** Dev A (OpenCode) · **Complexity:** Medium · **Migration:** none
 **Depends on:** nothing (free start — parallel lane, land early because 11 and 20 place UI inside this shell)
 

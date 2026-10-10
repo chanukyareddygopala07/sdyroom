@@ -18,7 +18,8 @@ Working log: what has landed, what each milestone still owes.
 | Private room invitations + member roster — `0007_room_invitations.sql`, addressed invitations, invite inbox, owner invite panel, `room_roster` RPC | `b4e1f33` (PR #7) | done |
 | Room management — `0008_room_management.sql` (`update_room` / `delete_room` RPCs, room-owner storage sweep policy), owner-only settings page, `PATCH`/`DELETE /api/rooms/[id]`, type-the-name delete confirmation | `61a99a0` (PR #8) | done |
 | Member safety — `0009_moderation.sql` (reports, one-way blocks, mutes enforced by the insert policy, member removal, owner-appointed moderators, audit trail), moderation inbox, shared report dialog, roster action menu | `1be4633` (PR #9) | done |
-| Resource hardening — `0010_resource_hardening.sql` (`rate_limits` + `rate_limit_take`, 1 GiB/500 MiB quotas with the `study_resources_quota_guard` trigger, `resource_quota`/`resource_quota_ok`), rate limits on uploads/deletes/downloads/sweeps/reports/blocks/mutes/invites, `POST /api/resources/cleanup`, quota line + quota-full state in the upload UI | `feat/resource-security` | in review (PR #10) |
+| Resource hardening — `0010_resource_hardening.sql` (`rate_limits` + `rate_limit_take`, 1 GiB/500 MiB quotas with the `study_resources_quota_guard` trigger, `resource_quota`/`resource_quota_ok`), rate limits on uploads/deletes/downloads/sweeps/reports/blocks/mutes/invites, `POST /api/resources/cleanup`, quota line + quota-full state in the upload UI | `06cfea4` (PR #10) | done |
+| Responsive shell & accessibility — skip link, `#main` landmark, route-change focus, mobile hamburger + off-canvas Sheet fed by the same nav-links list, 44px primary/icon buttons, auth-form `role="alert"` + `aria-invalid`/`aria-describedby`, real `h1` on auth/onboarding, AA error/warning text tokens, `prefers-reduced-motion`, focus timer announces transitions only | `b3acb0f` (PR #13, spec PR 19) | in review |
 
 ## Milestone D — task breakdown
 
@@ -477,3 +478,12 @@ Working log: what has landed, what each milestone still owes.
   ids); files are downloaded rather than previewed inline, with no versioning
   and no search beyond the title/subject/chapter filters (the per-scope quota
   line shipped in PR 10).
+- **Responsive + accessible baseline shipped (PR 19 / GitHub #13); a full WCAG
+  audit has not.** Under `md:` the inline header links give way to a labelled
+  hamburger and an off-canvas sheet (same nav-links list both places), every
+  audited page reflows at 375 px without horizontal scrolling, form failures
+  are `role="alert"` and tied to their fields, and the focus timer announces
+  transitions instead of every countdown tick. Deliberately not done: an
+  axe/Lighthouse sweep of every component, tablet-specific layouts beyond the
+  `md:` breakpoint, and a redesign of the top nav into a sidebar — the audit
+  spec assumed a sidebar that the app never had.

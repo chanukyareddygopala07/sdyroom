@@ -227,6 +227,70 @@ describe("FocusTimer", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the ticking countdown out of the live regions", () => {
+    renderTimer();
+
+    // The clock updates every second; announcing each tick would make the
+    // timer unusable with a screen reader.
+    expect(screen.getByText("1:30")).not.toHaveAttribute("aria-live");
+    expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
+    expect(document.querySelector("[aria-live]")).toHaveAttribute(
+      "aria-live",
+      "polite",
+    );
+    // The sync badge stays the section's only role="status".
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+  });
+
+  it("announces the start of a session through the polite region", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(201, { action: "started", session: runningSession }),
+    );
+    renderTimer({ initialSession: null, initialHistory: [] });
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Start 25 min session" }),
+      );
+    });
+
+    const polite = document.querySelector<HTMLElement>('[aria-live="polite"]');
+    expect(polite).not.toBeNull();
+    expect(polite).toHaveTextContent("Physics sprint: session started, 25 minutes.");
+    expect(polite).not.toHaveAttribute("role");
+  });
+
+  it("announces a pause through the polite region", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(200, { action: "paused", session: pausedSession }),
+      )
+      .mockResolvedValueOnce(workspaceResponseWith(pausedSession));
+    renderTimer();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    });
+
+    expect(document.querySelector('[aria-live="polite"]')).toHaveTextContent(
+      "Physics sprint: session paused.",
+    );
+  });
+
+  it("announces the time-up transition without repeating it per tick", () => {
+    renderTimer({
+      initialSession: {
+        ...runningSession,
+        ends_at: new Date(START).toISOString(),
+      },
+    });
+
+    expect(document.querySelector('[aria-live="polite"]')).toHaveTextContent(
+      "Physics sprint: time is up.",
+    );
+    expect(screen.getByText("Time is up.")).toBeInTheDocument();
+  });
+
   it("switches the start label when another preset is chosen", () => {
     renderTimer({ initialSession: null, initialHistory: [] });
 
