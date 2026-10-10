@@ -74,6 +74,10 @@ Level Security, Storage, Realtime).
   orphan cleanup
 -  Member safety: reports, one-way blocks, mutes, member removal, owner-appointed
   room moderators, and a moderation inbox that never shows the reporter
+-  In-app notifications: an inbox with a live unread badge in the header,
+  realtime updates and per-category preferences (no email or push)
+-  Responsive shell: mobile navigation drawer and an accessibility baseline
+  (skip link, landmarks, labelled controls, visible focus states)
 - Light and dark themes
 
 ###  In Review
@@ -88,14 +92,12 @@ Nothing is in review right now — the next candidates are listed under
 The ordered plan lives in [`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) and
 [`docs/milestones.md`](docs/milestones.md); highlights:
 
-- Notifications (PR 11)
 - AI study assistance — document Q&A over your own notes, quizzes, a study planner
   and analytics (PRs 12–16)
 - Richer room discovery (PR 17)
 - Production hardening — security headers/CSP, monitoring, backups, load testing
   (PR 18)
-- Mobile/responsive shell and accessibility baseline (PR 19), profile and settings
-  (PR 20), coverage gates (PR 21)
+- Profile and settings (PR 20), coverage gates (PR 21)
 
 <a name="demo"></a>
 
@@ -428,8 +430,8 @@ open a pull request.
 
 | Status | PRs |
 | --- | --- |
-|  Merged | #1–#10 — chat, realtime, focus sessions & goals, room discovery, resources, presence, invitations & roster, room management, member safety, resource security |
-|  Pending | #11–#21 — notifications, AI study assistance, richer discovery, production hardening, mobile & accessibility, profile/settings, coverage gates |
+|  Merged | #1–#11 and #19 — chat, realtime, focus sessions & goals, room discovery, resources, presence, invitations & roster, room management, member safety, resource security, notifications, responsive shell & accessibility |
+|  Pending | #12–#18 and #20–#21 — AI study assistance, richer discovery, production hardening, profile/settings, coverage gates |
 
 Details, order and acceptance criteria:
 [`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) ·
