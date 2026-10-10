@@ -689,6 +689,112 @@ fail-open rule.
 
 ---
 
+## Notifications (PR 11)
+
+| Method | Path | Summary |
+| --- | --- | --- |
+| `GET` | `/api/notifications` | The caller's own inbox, newest first |
+| `GET` | `/api/notifications/unread-count` | The header badge's cheapest read |
+| `POST` | `/api/notifications/[notificationId]/read` | Mark one own notification read |
+| `POST` | `/api/notifications/read-all` | Mark every own unread row read |
+| `PATCH` | `/api/profile/notification-prefs` | Per-category delivery preferences |
+
+All four reader/writer routes are session-gated and **scoped to the caller's
+own rows by RLS** — there is no id that reaches somebody else's notification
+(a foreign or missing id is the same `404`, so the endpoints are not
+existence oracles). The table carries no `INSERT` grant for any application
+role: rows are created only by the two SECURITY DEFINER producer RPCs
+(`push_notification`, `push_report_notification`) in `0011_notifications.sql`,
+each with a closed producer rule table documented in the migration header
+and proven by the integration suite. `href` is **derived at read time** from
+the row's `type`/`room_id` (map in `lib/notifications/types.ts`), never
+stored, so a route change cannot leave stale links behind. The reader routes
+are deliberately unthrottled, matching the repo's rule for own-row paginated
+reads (see "Rate limits" below).
+
+### `GET /api/notifications`
+
+Query `?limit=20&cursor=<opaque>&unread=true`. The cursor is the opaque
+base64url keyset (`created_at|id`); `unread=true` narrows the page to unread
+rows. The unread count rides the same response so neither the inbox page nor
+the bell spends a second round trip.
+
+`200 { "notifications": [{ "id", "type", "room_id", "payload": { "title",
+"body", "href" }, "read_at", "created_at" }], "has_more", "next_cursor",
+"total", "unread_count" }` · `400 validation` · `401` ·
+`500 notifications_failed`.
+
+### `GET /api/notifications/unread-count`
+
+One indexed count of the caller's own unread rows through the invoker's-rights
+`notifications_unread_count()` RPC. Deliberately separate from the list so the
+bell never downloads rows it will not show.
+
+`200 { "unread_count": 3 }` · `401` · `500 notifications_failed`.
+
+### `POST /api/notifications/[notificationId]/read`
+
+Bodyless; identity comes from the session and the row from the path.
+Idempotent by contract: an already-read row answers `200 { "read": true,
+"unchanged": true }`.
+
+`200 { "read": true, "unchanged": bool }` · `400 validation` /
+`invalid_request` (bad id or non-empty body) · `401` · `404 not_found` ·
+`500 notifications_failed`.
+
+### `POST /api/notifications/read-all`
+
+Bodyless. One statement under the own-row RLS policy — it updates exactly
+the rows the same caller could list. The count returned is rows actually
+touched, so a second call reports `{ "updated": 0 }`.
+
+`200 { "updated": 3 }` · `400 invalid_request` (non-empty body) · `401` ·
+`500 notifications_failed`.
+
+### `PATCH /api/profile/notification-prefs`
+
+Body `{ "prefs": { "invite": "none", … } }` — every key optional, every value
+from the closed enum `all | mentions_and_invites | none`, unknown keys a
+`400`. The partial body is merged over the stored record; the writer RPCs
+re-read it at **write time**, so a change binds the very next notification
+with nothing to cache or invalidate. The category map: `invite` (invitations),
+`moderation` (mutes, removals, report outcomes), `resource` (processing
+updates), `ai` (task completion), plus a `default` key for anything
+unmapped; `system` events ignore preferences and always deliver. The
+preferences form currently mounts on the inbox page — PR 20's settings page
+will absorb it unchanged.
+
+`200 { "prefs": { "default": "all", "invite": "all", "moderation": "all",
+"ai": "all", "resource": "all" } }` · `400 validation` / `invalid_json` ·
+`401` · `500 notifications_failed`.
+
+### Producers (the only writers)
+
+Exactly two producer RPCs exist, both SECURITY DEFINER, both returning a
+jsonb envelope (`created` / `deduped` / `muted` / `validation` /
+`not_authorized` / `not_found` / `invalid_payload`) rather than a bare id —
+the repo's envelope convention. Two RPCs, not one, because the reporter's
+uuid never travels through a route: `push_report_notification` derives it
+from the report row (the PR-09 rule), and `push_notification` takes a
+target alias resolved through the existing `moderation_resolve_alias` RPC.
+
+| Type | Producer route (retrofitted in this PR) | Who may produce it |
+| --- | --- | --- |
+| `invite_created` | `POST /api/rooms/[id]/invitations` | the room's owner (caller must own the room) |
+| `muted` | `POST …/members/[alias]/mute` | owner or moderator of the room |
+| `member_removed` | `DELETE …/members/[alias]` | owner or moderator of the room |
+| `report_resolved` | `PATCH /api/reports/[reportId]` (on `resolved`/`dismissed` only) | a moderator of the report's room — reporter identity read from the row, never the body |
+| `invite_accepted`, `resource_ready`, `ai_task_complete`, `system`, `moderation_resolved` | reserved | self only (`p_user_id = auth.uid()`); not yet emitted |
+
+Deduplication: an unread row with the same `dedupe_key` is **collapsed** —
+`created_at` and `payload` update, one row survives, the RPC answers
+`deduped` — enforced by a partial unique index so two concurrent producers
+cannot stack duplicates. A read row never blocks a new one. Rate limiting:
+none on the reader routes (own-row reads); the two producer routes inherit
+the rate limits their parent mutation routes already carry.
+
+---
+
 ## Rate limits (PR 10)
 
 One mechanism serves every throttled route: the `rate_limits` table
@@ -739,13 +845,13 @@ concentrate all of it on one room or library.
 
 | Concern | Status |
 | --- | --- |
-| Rate limiting | **Implemented for the routes listed in "Rate limits"** (PR 10): uploads, deletes, signed-URL issuance, sweeps, reports, blocks, mutes and invitations. Session-gated pages and paginated reads are deliberately unthrottled; anything PR 11 (notifications) adds should adopt the same `rate_limit_take` mechanism. |
+| Rate limiting | **Implemented for the routes listed in "Rate limits"** (PR 10): uploads, deletes, signed-URL issuance, sweeps, reports, blocks, mutes and invitations. Session-gated pages and paginated reads are deliberately unthrottled; PR 11's notification reader routes follow the same rule (own-row reads, no throttle) while its two producer RPCs ride the parent mutation routes' existing windows. |
 | Malware scanning | **Not implemented and not claimed.** Only signature/UTF-8 validation runs. |
 | Metadata editing (`PATCH`) | Not exposed. The `UPDATE` grant and policy exist and are exercised by the integration suite so the column set is provably narrow; no UI or endpoint needs renaming yet. |
 | Public/permanent file URLs | Never. Only short-lived signed URLs. |
 | Service-role usage at runtime | None. Every request runs on the cookie-scoped, user-privileged Supabase client. |
 | Bearer invite links / `/invite/[token]` | **Superseded, not built.** PR 07's spec called for a single-use token URL; the shipped design addresses invitations to an alias instead (no token exists to leak, forward or enumerate). See the reconciliation in `docs/prs/PR-07-private-invitations.md`. |
-| Inviting by email / phone / any contact data | **Never.** The app collects no contact data; delivery is the inbox itself. Revisit with PR 11 if product wants notifications. |
+| Inviting by email / phone / any contact data | **Never.** The app collects no contact data; delivery is the in-app inbox (PR 11). Notifications stay inside the product — no email, push or SMS was added, and none is planned. |
 | Invitations to public rooms | Refused (`409 room_public`): `join_room` already handles public entry. |
 | Global `/moderation` dashboard | **Not built.** Reports are room-scoped and authorization is per-room; the moderation inbox mounted in the room workspace is the product contract (PR 09's reconciliation). |
 | Message removal / soft-hide | **Never in v1.** `room_messages` keeps no `UPDATE`/`DELETE` grant and no hidden columns — moderators act at the member level (mute/remove) and reports carry the context. |

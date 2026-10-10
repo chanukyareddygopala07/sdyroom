@@ -1,6 +1,6 @@
 # PR 11 — Notification foundation (in-app inbox, no email)
 
-**Status:** specification only — no GitHub PR exists.
+**Status:** implemented on `feat/notifications`, in review.
 **Owner:** Dev A (OpenCode) · **Complexity:** Medium · **Migration:** `0011_notifications.sql`
 **Depends on:** PR 06 (presence events are a notification source), PR 09 (moderation actions are a source), PR 19 (bell placement lives in the responsive shell header), PR 20 (notification preferences belong to profile settings)
 

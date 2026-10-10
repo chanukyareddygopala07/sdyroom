@@ -17,6 +17,7 @@ import {
 import { rateLimitedResponse } from "@/lib/rate-limit/check";
 import { inviteSpec } from "@/lib/rate-limit/keys";
 import { createClient } from "@/lib/supabase/server";
+import { notify, roomDedupeKey } from "@/lib/notifications/write";
 import { createInvitationSchema } from "@/lib/validation/invitations";
 import { roomIdSchema } from "@/lib/validation/rooms";
 
@@ -92,6 +93,22 @@ export async function POST(request: NextRequest, { params }: InvitationsContext)
       parsed.data.invitee_alias,
       parsed.data.ttl_hours,
     );
+
+    // PR 11 producer: the invitee hears about it. Best-effort by contract —
+    // a notification failure never fails the invitation that already
+    // committed, and the room name is the only private detail that travels
+    // (the invitee is about to see it in /invitations anyway).
+    await notify(supabase, {
+      kind: "room",
+      type: "invite_created",
+      roomId: parsedRoomId.data,
+      targetAlias: invitation.invitee_alias,
+      payload: {
+        title: `Invitation to ${invitation.room_name}`,
+        body: `${invitation.inviter_alias} invited you to join ${invitation.room_name}.`,
+      },
+      dedupeKey: roomDedupeKey("invite_created", parsedRoomId.data),
+    });
 
     return NextResponse.json({ invitation }, { status: 201 });
   } catch (error) {

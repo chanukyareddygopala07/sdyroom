@@ -12,6 +12,7 @@ const {
   createInvitation,
   listRoomInvitations,
   revokeInvitation,
+  notify,
 } = vi.hoisted(() => ({
   createClient: vi.fn(),
   getClaims: vi.fn(),
@@ -19,6 +20,7 @@ const {
   createInvitation: vi.fn(),
   listRoomInvitations: vi.fn(),
   revokeInvitation: vi.fn(),
+  notify: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({ createClient }));
@@ -33,6 +35,11 @@ vi.mock("@/lib/invitations/queries", async (importOriginal) => ({
   createInvitation,
   listRoomInvitations,
   revokeInvitation,
+}));
+
+vi.mock("@/lib/notifications/write", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/notifications/write")>()),
+  notify,
 }));
 
 const rpc = vi.fn(async () => ({ data: true }));
@@ -91,6 +98,8 @@ describe("invitations routes", () => {
     createInvitation.mockResolvedValue(INVITATION);
     listRoomInvitations.mockResolvedValue([INVITATION]);
     revokeInvitation.mockResolvedValue(undefined);
+    notify.mockReset();
+    notify.mockResolvedValue(undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
 
@@ -210,6 +219,41 @@ describe("invitations routes", () => {
         "studybuddy",
         24,
       );
+    });
+
+    it("tells the invitee through the notification producer — by alias, never id", async () => {
+      const { request, context } = post(
+        JSON.stringify({ invitee_alias: "studybuddy" }),
+      );
+
+      const response = await POST(request, context);
+
+      expect(response.status).toBe(201);
+      expect(notify).toHaveBeenCalledWith(expect.anything(), {
+        kind: "room",
+        type: "invite_created",
+        roomId: ROOM_ID,
+        targetAlias: INVITATION.invitee_alias,
+        payload: {
+          title: "Invitation to Quiet Hall",
+          body: `${INVITATION.inviter_alias} invited you to join Quiet Hall.`,
+        },
+        dedupeKey: `invite_created:${ROOM_ID}`,
+      });
+    });
+
+    it("does not notify when the invitation itself failed", async () => {
+      createInvitation.mockRejectedValue(
+        new InvitationError("already_invited", "Already invited.", 409),
+      );
+      const { request, context } = post(
+        JSON.stringify({ invitee_alias: "studybuddy" }),
+      );
+
+      const response = await POST(request, context);
+
+      expect(response.status).toBe(409);
+      expect(notify).not.toHaveBeenCalled();
     });
 
     it("maps a missing alias to 404 invitee_not_found", async () => {

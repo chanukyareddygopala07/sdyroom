@@ -44,7 +44,11 @@ test.describe("room management", () => {
       const save = owner.getByRole("button", { name: "Save changes" });
       await expect(save).toBeEnabled();
       await save.click();
-      await expect(owner.getByRole("status")).toHaveText("Room settings saved.");
+      // Filter by vocabulary: the header's notification live region is also
+      // a role="status", exactly like chat's status-vs-headcount split.
+      await expect(
+        owner.getByRole("status").filter({ hasText: "Room settings saved." }),
+      ).toHaveText("Room settings saved.");
 
       // The member sees the new name and goal after a refresh…
       await member.goto(`/rooms/${room.id}`);
@@ -82,7 +86,9 @@ test.describe("room management", () => {
       await waitForHydration(owner, "#settings-status");
       await owner.locator("#settings-status").selectOption("closed");
       await owner.getByRole("button", { name: "Save changes" }).click();
-      await expect(owner.getByRole("status")).toHaveText("Room settings saved.");
+      await expect(
+        owner.getByRole("status").filter({ hasText: "Room settings saved." }),
+      ).toHaveText("Room settings saved.");
 
       // The owner's workspace badges the closed state.
       await owner.goto(`/rooms/${room.id}`);

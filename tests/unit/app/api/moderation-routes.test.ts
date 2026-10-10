@@ -15,6 +15,7 @@ const {
   listReports,
   setReportStatus,
   createBlock,
+  notify,
 } = vi.hoisted(() => ({
   createClient: vi.fn(),
   getClaims: vi.fn(),
@@ -23,6 +24,7 @@ const {
   listReports: vi.fn(),
   setReportStatus: vi.fn(),
   createBlock: vi.fn(),
+  notify: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({ createClient }));
@@ -38,6 +40,11 @@ vi.mock("@/lib/moderation/queries", async (importOriginal) => ({
   listReports,
   setReportStatus,
   createBlock,
+}));
+
+vi.mock("@/lib/notifications/write", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/notifications/write")>()),
+  notify,
 }));
 
 const rpc = vi.fn(async () => ({ data: true }));
@@ -95,6 +102,8 @@ describe("moderation routes", () => {
       created_at: "2026-10-07T10:00:00.000Z",
       created: true,
     });
+    notify.mockReset();
+    notify.mockResolvedValue(undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
 
@@ -366,6 +375,45 @@ describe("moderation routes", () => {
         REPORT_ID,
         "reviewing",
       );
+      // An intermediate transition is not an outcome the reporter is told
+      // about; only resolved/dismissed notify.
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it("notifies the reporter on a terminal transition — report path, no uuid", async () => {
+      setReportStatus.mockResolvedValueOnce({ id: REPORT_ID, status: "resolved" });
+      const [request, context] = patch(
+        JSON.stringify({ status: "resolved" }),
+      );
+
+      const response = await reportPatch(request, context);
+
+      expect(response.status).toBe(200);
+      expect(notify).toHaveBeenCalledWith(expect.anything(), {
+        kind: "report",
+        type: "report_resolved",
+        reportId: REPORT_ID,
+        payload: expect.objectContaining({ title: "Report resolved" }),
+        dedupeKey: `report_resolved:${REPORT_ID}`,
+      });
+    });
+
+    it("a surprising notify outcome never changes the route's response", async () => {
+      setReportStatus.mockResolvedValueOnce({ id: REPORT_ID, status: "dismissed" });
+      // notify() swallows its own failures by contract (write.test.ts forces
+      // a rejecting RPC); at the route boundary the guarantee is that any
+      // outcome it produces — even an unexpected code — leaves the committed
+      // transition's 200 untouched.
+      notify.mockResolvedValueOnce(undefined);
+
+      const response = await reportPatch(
+        ...patch(JSON.stringify({ status: "dismissed" })),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        report: { id: REPORT_ID, status: "dismissed" },
+      });
     });
 
     it("maps an invalid transition and a hidden report onto 409 and 404", async () => {
