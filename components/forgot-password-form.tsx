@@ -49,7 +49,9 @@ export function ForgotPasswordForm({
       {success ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-2xl">Check Your Email</CardTitle>
+            <CardTitle as="h1" className="text-2xl">
+              Check Your Email
+            </CardTitle>
             <CardDescription>Password reset instructions sent</CardDescription>
           </CardHeader>
           <CardContent>
@@ -62,7 +64,9 @@ export function ForgotPasswordForm({
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle className="text-2xl">Reset Your Password</CardTitle>
+            <CardTitle as="h1" className="text-2xl">
+              Reset Your Password
+            </CardTitle>
             <CardDescription>
               Type in your email and we&apos;ll send you a link to reset your
               password
@@ -78,11 +82,22 @@ export function ForgotPasswordForm({
                     type="email"
                     placeholder="m@example.com"
                     required
+                    autoComplete="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? "forgot-password-error" : undefined}
                   />
                 </div>
-                {error && <p className="text-sm text-red-500">{error}</p>}
+                {error && (
+                  <p
+                    id="forgot-password-error"
+                    className="text-sm text-error"
+                    role="alert"
+                  >
+                    {error}
+                  </p>
+                )}
                 <Button type="submit" className="w-full" disabled={isLoading}>
                   {isLoading ? "Sending..." : "Send reset email"}
                 </Button>
@@ -91,7 +106,7 @@ export function ForgotPasswordForm({
                 Already have an account?{" "}
                 <Link
                   href="/auth/login"
-                  className="underline underline-offset-4"
+                  className="underline underline-offset-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   Login
                 </Link>

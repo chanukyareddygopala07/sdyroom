@@ -84,7 +84,7 @@ function toFieldErrors(issues: ApiIssue[]): Record<string, string> {
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return (
-    <p className="text-sm text-red-500" role="alert">
+    <p className="text-sm text-error" role="alert">
       {message}
     </p>
   );
@@ -360,7 +360,7 @@ export function RoomSettingsForm({
               </div>
 
               {formError && (
-                <p className="text-sm text-red-500" role="alert">
+                <p className="text-sm text-error" role="alert">
                   {formError}
                 </p>
               )}

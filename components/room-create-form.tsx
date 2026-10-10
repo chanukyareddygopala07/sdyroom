@@ -48,7 +48,7 @@ function toFieldErrors(issues: ApiIssue[]): Record<string, string> {
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return (
-    <p className="text-sm text-red-500" role="alert">
+    <p className="text-sm text-error" role="alert">
       {message}
     </p>
   );
@@ -132,7 +132,9 @@ export function RoomCreateForm({
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card className="max-w-2xl">
         <CardHeader>
-          <CardTitle className="text-2xl">New study room</CardTitle>
+          <CardTitle as="h2" className="text-2xl">
+            New study room
+          </CardTitle>
           <CardDescription>
             You become the owner. Public rooms appear in discovery immediately;
             private rooms stay unlisted.
@@ -242,7 +244,7 @@ export function RoomCreateForm({
               </div>
 
               {formError && (
-                <p className="text-sm text-red-500" role="alert">
+                <p className="text-sm text-error" role="alert">
                   {formError}
                 </p>
               )}

@@ -137,7 +137,7 @@ export default async function RoomsPage({ searchParams }: RoomsPageProps) {
       </Suspense>
 
       {searchError && (
-        <p className="text-sm text-red-500" role="alert">
+        <p className="text-sm text-error" role="alert">
           {searchError}
         </p>
       )}

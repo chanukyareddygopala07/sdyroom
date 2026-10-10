@@ -180,7 +180,7 @@ export function InvitationsList({
           {invitation.expires_at.slice(0, 16).replace("T", " ")} UTC
         </span>
         {actionError?.id === invitation.id && (
-          <span className="text-sm text-red-500" role="alert">
+          <span className="text-sm text-error" role="alert">
             {actionError.message}
           </span>
         )}
