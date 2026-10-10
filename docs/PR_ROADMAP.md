@@ -4,10 +4,12 @@ Working plan: what is already shipped, what is left, and the exact sequence of
 pull requests that finishes the product. Every PR below has a PR-ready
 implementation specification in [`docs/prs/`](prs/).
 
-> **These are specifications, not GitHub pull requests.** Nothing in
-> `docs/prs/` exists as a PR on the repository. As of this writing GitHub shows
-> **10 PRs merged (01–10), no open PRs**. A spec becomes a PR only when a
-> developer creates a branch and opens one.
+> **These are specifications, not GitHub pull requests.** Most entries in
+> `docs/prs/` exist only as a spec. As of this writing GitHub shows **12 PRs
+> merged (01–12), 1 open** — [PR #13](https://github.com/chanukyareddygopala07/sdyroom/pull/13),
+> the implementation of spec PR 19 (responsive shell & accessibility) on
+> `feat/responsive-accessibility`. A spec becomes a PR only when a developer
+> creates a branch and opens one.
 
 ---
 
@@ -97,7 +99,7 @@ merged) plus 3 discovered during the audit (19–21). Each has a spec in
 | 16 | Study analytics & accountability | [`PR-16`](prs/PR-16-study-analytics.md) | A | 14 | `0014` | Medium | Pending |
 | 17 | Advanced public room discovery | [`PR-17`](prs/PR-17-room-discovery.md) | A | 06 | `0016` | Medium | Pending |
 | 18 | Production security & reliability hardening | [`PR-18`](prs/PR-18-production-hardening.md) | B | 10, 19, 21 + core | `0017` (if needed) | XL | Pending |
-| 19 | Responsive shell, mobile nav & accessibility baseline | [`PR-19`](prs/PR-19-responsive-shell-a11y.md) | A | none | none | Medium | Pending |
+| 19 | Responsive shell, mobile nav & accessibility baseline | [`PR-19`](prs/PR-19-responsive-shell-a11y.md) | A | none | none | Medium | In review — [PR #13](https://github.com/chanukyareddygopala07/sdyroom/pull/13) (`b3acb0f`) |
 | 20 | Profile & settings (alias editing) | [`PR-20`](prs/PR-20-profile-settings.md) | B | none | none | Small | Pending |
 | 21 | Quality & coverage baseline | [`PR-21`](prs/PR-21-quality-coverage-baseline.md) | B | none | none | Medium | Pending |
 
