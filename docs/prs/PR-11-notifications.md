@@ -3,7 +3,7 @@
 **Status:** implemented on `feat/notifications` —
 [PR #15](https://github.com/chanukyareddygopala07/sdyroom/pull/15) (`684a7bf`),
 in review.
-**Owner:** Dev A (OpenCode) · **Complexity:** Medium · **Migration:** `0011_notifications.sql`
+**Owner:** Dev A (OpenCode) · **Complexity:** Medium · **Migration:** `0012_notifications.sql`
 **Depends on:** PR 06 (presence events are a notification source), PR 09 (moderation actions are a source), PR 19 (bell placement lives in the responsive shell header), PR 20 (notification preferences belong to profile settings)
 
 ---
@@ -120,7 +120,7 @@ feature must not depend on an unresolved policy question.
 
 ### Database work
 
-`supabase/migrations/0011_notifications.sql`:
+`supabase/migrations/0012_notifications.sql`:
 
 - `notifications(id uuid pk, user_id uuid not null references auth.users on
   delete cascade, type text not null check (type in ('invite_created',
@@ -286,7 +286,7 @@ of them in `docs/API_CONTRACTS.md` so PRs 12–15 only pick from the list.
 ### Files / modules likely affected
 
 ```
-supabase/migrations/0011_notifications.sql                (new)
+supabase/migrations/0012_notifications.sql                (new)
 lib/notifications/{write,subscribe,queries,types}.ts      (new)
 app/api/notifications/route.ts                            (new)
 app/api/notifications/unread-count/route.ts               (new)

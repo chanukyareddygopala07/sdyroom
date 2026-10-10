@@ -1,4 +1,4 @@
--- 0011_notifications.sql
+-- 0012_notifications.sql
 -- In-app notifications: the `notifications` table, the producer RPCs, the
 -- per-user preferences column, unread count and the retention function.
 -- Local-only target: `npx supabase db reset` / `npx supabase db push --local`.

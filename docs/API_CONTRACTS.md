@@ -704,7 +704,7 @@ own rows by RLS** — there is no id that reaches somebody else's notification
 (a foreign or missing id is the same `404`, so the endpoints are not
 existence oracles). The table carries no `INSERT` grant for any application
 role: rows are created only by the two SECURITY DEFINER producer RPCs
-(`push_notification`, `push_report_notification`) in `0011_notifications.sql`,
+(`push_notification`, `push_report_notification`) in `0012_notifications.sql`,
 each with a closed producer rule table documented in the migration header
 and proven by the integration suite. `href` is **derived at read time** from
 the row's `type`/`room_id` (map in `lib/notifications/types.ts`), never

@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * Live delivery for an open tab.
  *
  * Mode: **postgres_changes on the `notifications` table** — the same
- * mechanism chat already uses for `room_messages` (0011 adds the table to
+ * mechanism chat already uses for `room_messages` (0012 adds the table to
  * the `supabase_realtime` publication). Delivery is scoped by the
  * subscriber's own SELECT RLS and by a `user_id=eq.<me>` filter, so a frame
  * for another user's row is the same impossibility as reading that row over

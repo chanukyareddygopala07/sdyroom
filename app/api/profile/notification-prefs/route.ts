@@ -14,7 +14,7 @@ import { createClient } from "@/lib/supabase/server";
  * with every key optional and every value from the closed enum; unknown keys
  * are a 400 naming the field, and the update is merged over the stored
  * record so an untouched category stays untouched. The profile row is the
- * caller's own (`profiles_update_own` + the 0011 column grant), and the
+ * caller's own (`profiles_update_own` + the 0012 column grant), and the
  * writer RPCs re-read this column at write time — a change here binds the
  * very next notification, with nothing to cache or invalidate.
  *

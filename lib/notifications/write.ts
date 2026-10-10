@@ -12,7 +12,7 @@ import type { NotificationPayload } from "./types";
  *
  * Writes go through SECURITY DEFINER RPCs because `notifications` carries no
  * INSERT grant — one user notifying another is only possible inside the
- * producer-authorization table documented in `0011_notifications.sql`. The
+ * producer-authorization table documented in `0012_notifications.sql`. The
  * room-shaped events take the target's **alias** (the only identity a route
  * legitimately holds); the uuid is resolved inside the request via
  * `moderation_resolve_alias` and never returns to the client. Report events

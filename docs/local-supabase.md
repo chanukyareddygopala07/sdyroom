@@ -99,7 +99,13 @@ one counter table (`rate_limits`), four functions (`rate_limit_take`,
 BEFORE INSERT trigger on `study_resources`, and execute-grant hygiene — and
 **no new policy anywhere** (the limiter's table is closed by grants *and* by
 RLS-with-zero-policies instead).
-`supabase/migrations/0011_notifications.sql` adds the in-app notification
+`supabase/migrations/0011_resource_moderation_delete.sql` (merged on `main`
+as GitHub #14) allows a room owner or appointed moderator to remove a shared
+resource: one SECURITY DEFINER function (`delete_moderated_resource`, granted
+to `authenticated` only), a widened re-creation of the room-owner storage
+DELETE policy, and a `resource_removed` addition to the `moderation_actions`
+action CHECK — no new table, no new public policy.
+`supabase/migrations/0012_notifications.sql` adds the in-app notification
 foundation: one table (`notifications`), one column on `profiles`
 (`notification_prefs jsonb`, default `'{"default": "all"}'`), four functions
 (`push_notification` and `push_report_notification` — the only writers, both
@@ -113,7 +119,7 @@ application role: the exact verbs `authenticated` holds are `SELECT`,
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
-| `profiles` | `id` → `auth.users`, `alias`, `exam_targets`, `notification_prefs`, `created_at` | No email, no auth metadata, no other PII. `alias` 1–32 chars, trimmed, unique on `lower(alias)` (case-insensitive, no `citext`). `exam_targets` is a `jsonb` array, default `'[]'`. `notification_prefs` (`0011`) is a `jsonb` object of per-category values from `all`/`mentions_and_invites`/`none` plus a `default` key (default `'{"default": "all"}'`), writable only through a narrow column-level `UPDATE` grant. |
+| `profiles` | `id` → `auth.users`, `alias`, `exam_targets`, `notification_prefs`, `created_at` | No email, no auth metadata, no other PII. `alias` 1–32 chars, trimmed, unique on `lower(alias)` (case-insensitive, no `citext`). `exam_targets` is a `jsonb` array, default `'[]'`. `notification_prefs` (`0012`) is a `jsonb` object of per-category values from `all`/`mentions_and_invites`/`none` plus a `default` key (default `'{"default": "all"}'`), writable only through a narrow column-level `UPDATE` grant. |
 | `rooms` | `id`, `owner_id` → `auth.users`, `visibility`, `name`, `capacity`, `exam_track`, `subject`, `language`, `status`, `shared_goal`, `created_at`, `updated_at` | `visibility` ∈ `public`/`private`; `status` ∈ `open`/`closed` (default `open`); `capacity` 1–100 (default 4); name 1–100 chars trimmed. Partial index on public rooms by `created_at desc`. |
 | `room_members` | PK `(room_id, user_id)`, `role`, `joined_at` | `role` ∈ `owner`/`student` (default `student`). `room_id` and `user_id` both `ON DELETE CASCADE`. Index on `user_id`. |
 | `focus_sessions` | `id`, `room_id` → `rooms`, `state`, `duration_seconds`, `started_at`, `ends_at`, `paused_at`, `paused_seconds`, `ended_at` | `state` ∈ `running`/`paused`/`completed`/`expired`. Partial unique index `focus_sessions_one_active (room_id) where state in ('running','paused')` — at most one active session per room, concurrency-safe. CHECKs pair `paused ⇔ paused_at` and `terminal ⇔ ended_at`, and require `ends_at > started_at`. Selected by `authenticated` only; every write goes through the RPCs. |
@@ -127,7 +133,7 @@ application role: the exact verbs `authenticated` holds are `SELECT`,
 | `room_mutes` | `room_id`, `user_id`, `muted_until`, `muted_by`, `created_at`, unique `(room_id, user_id)` | One live mute per member per room (`0009`). Uniqueness is **total**, not partial: a `where muted_until > now()` predicate would not be immutable, so the RPC sweeps expired rows before inserting instead. `SELECT` for `authenticated` (the `room_messages` INSERT policy subquery needs it) plus an own-row policy; writes are RPC-only. |
 | `user_blocks` | `blocker_id` → `auth.users`, `blocked_id` → `auth.users`, `created_at`, PK `(blocker_id, blocked_id)`, CHECK `blocker_id <> blocked_id` | One-directional blocks (`0009`): visible to the blocker only, neither side notified. `SELECT` for `authenticated` (the `room_messages` SELECT policy filters on it) plus an own-row policy; writes are RPC-only. |
 | `rate_limits` | `key` (PK), `window_start`, `count` | Fixed-window counters for the shared limiter (`0010`). **Zero grants and zero policies for every role** — the only writer and reader is the `rate_limit_take` SECURITY DEFINER RPC, so a direct PostgREST access dies on `42501` before RLS is even consulted, and a hypothetical future grant would still be filtered to nothing by the policy-free table. |
-| `notifications` | `id`, `user_id` → `auth.users`, `type`, `payload` (jsonb), `read_at`, `created_at`, `room_id` → `rooms`, `dedupe_key` | One row per delivered event (`0011`). `type` is a closed CHECK enum (`invite_created`/`invite_accepted`/`member_removed`/`muted`/`moderation_resolved`/`report_resolved`/`resource_ready`/`ai_task_complete`/`system`); `payload` holds `{title, body, href}` and `href` is derived at read time, never trusted from storage. Partial unique index `(user_id, dedupe_key) where read_at is null and dedupe_key is not null` collapses unread duplicates; `user_id`/`room_id` cascade on delete. `SELECT`/`UPDATE (read_at)`/`DELETE` for `authenticated`, each under its own `user_id = auth.uid()` policy; **no `INSERT` for any role** — the only writers are the two SECURITY DEFINER producer RPCs. |
+| `notifications` | `id`, `user_id` → `auth.users`, `type`, `payload` (jsonb), `read_at`, `created_at`, `room_id` → `rooms`, `dedupe_key` | One row per delivered event (`0012`). `type` is a closed CHECK enum (`invite_created`/`invite_accepted`/`member_removed`/`muted`/`moderation_resolved`/`report_resolved`/`resource_ready`/`ai_task_complete`/`system`); `payload` holds `{title, body, href}` and `href` is derived at read time, never trusted from storage. Partial unique index `(user_id, dedupe_key) where read_at is null and dedupe_key is not null` collapses unread duplicates; `user_id`/`room_id` cascade on delete. `SELECT`/`UPDATE (read_at)`/`DELETE` for `authenticated`, each under its own `user_id = auth.uid()` policy; **no `INSERT` for any role** — the only writers are the two SECURITY DEFINER producer RPCs. |
 
 No sample rooms and no fabricated auth users are inserted by SQL: `supabase/seed.sql`
 is intentionally empty, and local test data is made only through the Auth API and the
@@ -135,7 +141,7 @@ is intentionally empty, and local test data is made only through the Auth API an
 
 `focus_sessions` and `room_messages` are added to the `supabase_realtime`
 publication, so members' clients receive `postgres_changes` events for their room's
-session and chat and re-read the view; `notifications` (`0011`) joins the same
+session and chat and re-read the view; `notifications` (`0012`) joins the same
 publication so an open tab's badge updates on insert — delivery is still filtered
 by the subscriber's own `SELECT` RLS and a `user_id=eq.<me>` frame filter;
 `study_goals` and `study_resources` are
@@ -163,7 +169,7 @@ by no application role whatsoever (PostgreSQL fires triggers without an
 EXECUTE check, so the quota guard runs for every insert while nothing can call
 it directly).
 
-`notifications` (`0011`) is also absent: `authenticated` holds exactly
+`notifications` (`0012`) is also absent: `authenticated` holds exactly
 `SELECT`, `UPDATE (read_at)` and `DELETE` — **no `INSERT` verb exists for any
 role**, so the only way a row appears is one of the two SECURITY DEFINER
 producer RPCs (`push_notification`, `push_report_notification`), each granted
@@ -248,7 +254,7 @@ rows.
 | `room_mutes` | `room_mutes_select_own` (`0009`) | `user_id = auth.uid()` only — the table-level `SELECT` exists for the chat policy's subquery, and this policy keeps the direct read scoped to the caller's own mute rows |
 | `user_blocks` | `user_blocks_select_own` (`0009`) | `blocker_id = auth.uid()` only — the same reasoning as `room_mutes`; the blocked side never sees the row that names them |
 | `rate_limits` | none (`0010`) | RLS enabled with **zero policies**: even if a grant ever appeared, every read and write would be filtered to nothing. `tests/integration/resource-hardening.test.ts` widens the grant inside the test and observes exactly that (`select` → 0 rows, `insert` → row-level security refusal), then revokes and re-checks `has_table_privilege` = `f` |
-| `notifications` | `notifications_select_own` / `update_own` / `delete_own` (`0011`) | `user_id = auth.uid()` on all three verbs — a student lists, marks read and deletes only their own rows. There is deliberately no insert policy (and no insert grant), so a hypothetical widened grant would still produce nothing: the same two-layer shape as `rate_limits`, minus the RPC-only reads |
+| `notifications` | `notifications_select_own` / `update_own` / `delete_own` (`0012`) | `user_id = auth.uid()` on all three verbs — a student lists, marks read and deletes only their own rows. There is deliberately no insert policy (and no insert grant), so a hypothetical widened grant would still produce nothing: the same two-layer shape as `rate_limits`, minus the RPC-only reads |
 | `realtime.messages` | `room_presence_select_member` / `room_presence_insert_member` (`0006`) | the whole of the private-channel gate for `room-presence-{uuid}` topics: `authenticated` only, extension must be `broadcast`/`presence`, and the uuid in the topic must match a current `room_members` row for `auth.uid()` — so a non-member (or an anonymous client) cannot join, cannot confirm a private room exists, and cannot read another room's roster. Realtime's authorization probes run as the caller inside a transaction that rolls back, so nothing is ever written |
 
 Storage objects have their own four policies (next section); they are not listed
@@ -517,7 +523,7 @@ against rows selected by `storage_path LIKE '<prefix>/%'`, removes orphan
 objects first and broken rows second, and skips anything younger than a 60 s
 grace period in both directions.
 
-## Notification functions (`0011_notifications.sql`)
+## Notification functions (`0012_notifications.sql`)
 
 | Object | Behaviour |
 | --- | --- |
@@ -534,8 +540,8 @@ All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001 … 0011
-npx supabase migration list --local # 0001 … 0011 present locally
+npx supabase db reset               # exit 0: applied 0001 … 0012
+npx supabase migration list --local # 0001 … 0012 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
@@ -550,7 +556,7 @@ Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
   `room_mutes_select_own` and `user_blocks_select_own` and re-created
   `room_messages`' two policies in place, so the count moves 21 → 23;
   **`0010` adds none** — `rate_limits` is closed by zero grants plus
-  zero policies instead — and `0011` adds the three `notifications`
+  zero policies instead — and `0012` adds the three `notifications`
   own-row policies, 23 → 26); plus
   the two `0006` policies on `realtime.messages` (`room_presence_select_member`
   / `room_presence_insert_member`) and the 4 storage policies on

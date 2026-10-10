@@ -154,7 +154,7 @@ so each rule is stated rather than implied:
 
 ## Notifications: who may write, who may read, who decides
 
-`0011_notifications.sql` keeps the writer surface as small as the table's:
+`0012_notifications.sql` keeps the writer surface as small as the table's:
 
 - **No application role can `INSERT`.** The table grants `authenticated`
   only `SELECT`, `UPDATE (read_at)` and `DELETE`, all under own-row
