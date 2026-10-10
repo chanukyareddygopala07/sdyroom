@@ -1,3 +1,4 @@
+
 import { NextResponse, type NextRequest } from "next/server";
 import { errorResponse } from "@/lib/api/responses";
 import { rateLimitedResponse } from "@/lib/rate-limit/check";
@@ -14,53 +15,48 @@ import { resourceIdSchema } from "@/lib/validation/resources";
 type ResourceContext = { params: Promise<{ id: string }> };
 
 /**
- * DELETE /api/resources/[id] — remove a resource for good.
+ * DELETE /api/resources/[id]
  *
- * Order matters and is deliberate:
+ * Personal resources:
+ *   Only the uploader may delete them.
  *
- *  1. Resolve the row. RLS answers "is this resource visible to me?", so a
- *     missing id and somebody else's id both become 404 without revealing
- *     which.
- *  2. Confirm the caller is the uploader, from the server-built key. A room
- *     member can see a shared file but must never reach step 3 for it — the
- *     storage policy would refuse the write anyway, but a rule that is only
- *     enforced by accident is a rule nobody has actually checked.
- *  3. Remove the object first. Deletion is idempotent, so a retry after any
- *     partial failure converges; and because the object goes before the row,
- *     a failure here changes nothing and `cleanup_failed` means "try again"
- *     rather than "it half-worked".
- *  4. Remove the row. If this fails, `delete_failed` is returned and a retry
- *     re-runs both steps safely.
+ * Shared resources:
+ *   The uploader, room owner, or appointed moderator may delete them.
  *
- * The opposite order was rejected on purpose: a row removed first would leave
- * a file advertised in the list that could never be downloaded, and would make
- * a 500 a lie about what actually happened.
+ * For moderator deletion, the database RPC re-checks authorization and
+ * deletes the metadata row plus its audit entry in one transaction.
  *
- * Responses:
- * | Status | Body |
- * | --- | --- |
- * | 200 | `{ "deleted": true }` |
- * | 400 | `{ "error": { "code": "validation" } }` |
- * | 401 | `{ "error": { "code": "unauthenticated" } }` |
- * | 404 | `{ "error": { "code": "not_found" } }` |
- * | 429 | `{ "error": { "code": "rate_limited" } }` |
- * | 500 | `{ "error": { "code": "delete_failed" \| "cleanup_failed" } }` |
+ * Storage is removed before metadata, so a Storage failure does not remove
+ * the database row. Storage and database changes are separate operations;
+ * if the database operation fails after Storage removal, retrying can
+ * converge because Storage deletion is idempotent.
  */
-export async function DELETE(request: NextRequest, { params }: ResourceContext) {
+export async function DELETE(
+  request: NextRequest,
+  { params }: ResourceContext,
+) {
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
   const claims = data?.claims;
 
   if (!claims?.sub) {
-    return errorResponse("unauthenticated", "Sign in to delete a file.", 401);
+    return errorResponse(
+      "unauthenticated",
+      "Sign in to delete a file.",
+      401,
+    );
   }
 
   const { id } = await params;
   const parsedId = resourceIdSchema.safeParse(id);
+
   if (!parsedId.success) {
-    return errorResponse("validation", "That resource id is not valid.", 400, [
-      { path: "id", message: "Resource id must be a UUID." },
-    ]);
+    return errorResponse(
+      "validation",
+      "That resource id is not valid.",
+      400,
+      [{ path: "id", message: "Resource id must be a UUID." }],
+    );
   }
 
   const limited = await rateLimitedResponse(
@@ -68,13 +64,16 @@ export async function DELETE(request: NextRequest, { params }: ResourceContext) 
     resourceDeleteSpec(claims.sub),
     "Too many delete requests — wait about a minute and try again.",
   );
+
   if (limited) {
     return limited;
   }
 
   try {
+    // RLS hides resources the caller is not allowed to see.
     const locator = await findResourceLocator(supabase, parsedId.data);
-    if (!locator || !isOwnedBy(locator.storage_path, claims.sub)) {
+
+    if (!locator) {
       return errorResponse(
         "not_found",
         "That resource does not exist or is not available.",
@@ -82,17 +81,103 @@ export async function DELETE(request: NextRequest, { params }: ResourceContext) 
       );
     }
 
-    await removeResourceObject(supabase, locator.storage_path);
+    // Ownership is taken from the server-generated storage path,
+    // never from a value supplied by the caller.
+    const uploadedByCaller = isOwnedBy(
+      locator.storage_path,
+      claims.sub,
+    );
 
-    const removed = await deleteResourceMetadata(supabase, parsedId.data);
-    if (!removed) {
-      // The row went away between the lookup and the delete — somebody with
-      // the same rights already finished the job. Nothing is half-done.
+    let moderatedSharedDelete = false;
+
+    // Another user's shared resource may be deleted only by the room
+    // owner or an appointed moderator.
+    if (!uploadedByCaller && locator.room_id !== null) {
+      const { data: role, error: roleError } = await supabase.rpc(
+        "moderation_actor_role",
+        { p_room_id: locator.room_id },
+      );
+
+      if (roleError) {
+        console.error(
+          "[api/resources] moderation role check failed:",
+          roleError.message,
+        );
+
+        throw new Error("Moderation role check failed");
+      }
+
+      if (role !== "owner" && role !== "moderator") {
+        return errorResponse(
+          "not_found",
+          "That resource does not exist or is not available.",
+          404,
+        );
+      }
+
+      moderatedSharedDelete = true;
+    }
+
+    // Personal resources remain uploader-only.
+    if (!uploadedByCaller && !moderatedSharedDelete) {
       return errorResponse(
         "not_found",
         "That resource does not exist or is not available.",
         404,
       );
+    }
+
+    // Delete the Storage object first. Its DELETE policy independently
+    // checks uploader ownership or room-scoped moderation permission.
+    await removeResourceObject(supabase, locator.storage_path);
+
+    if (moderatedSharedDelete) {
+      // Re-check authorization in the database and atomically delete the
+      // metadata row and append the moderation audit entry.
+      const { data: result, error: deleteError } = await supabase.rpc(
+        "delete_moderated_resource",
+        { p_resource_id: parsedId.data },
+      );
+
+      if (deleteError) {
+        console.error(
+          "[api/resources] moderated delete failed:",
+          deleteError.message,
+        );
+
+        throw new ResourceError(
+          "delete_failed",
+          "The resource could not be deleted. Please try again.",
+          500,
+        );
+      }
+
+      if (
+        !result ||
+        typeof result !== "object" ||
+        Array.isArray(result) ||
+        result.code !== "deleted"
+      ) {
+        throw new ResourceError(
+          "delete_failed",
+          "The resource could not be deleted. Please try again.",
+          500,
+        );
+      }
+    } else {
+      // The uploader continues to use the existing metadata deletion path.
+      const removed = await deleteResourceMetadata(
+        supabase,
+        parsedId.data,
+      );
+
+      if (!removed) {
+        return errorResponse(
+          "not_found",
+          "That resource does not exist or is not available.",
+          404,
+        );
+      }
     }
 
     return NextResponse.json({ deleted: true });
@@ -102,6 +187,7 @@ export async function DELETE(request: NextRequest, { params }: ResourceContext) 
     }
 
     console.error("[api/resources] delete failed:", error);
+
     return errorResponse(
       "delete_failed",
       "The resource could not be deleted. Please try again.",

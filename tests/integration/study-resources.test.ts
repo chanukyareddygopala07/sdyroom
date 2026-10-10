@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DELETE as resourceDelete } from "@/app/api/resources/[id]/route";
 import { GET as resourceDownload } from "@/app/api/resources/[id]/download/route";
-import { GET as resourcesGet, POST as resourcesPost } from "@/app/api/resources/route";
-import { RESOURCE_BUCKET } from "@/lib/resources/types";
+import {
+  GET as resourcesGet,
+  POST as resourcesPost,
+} from "@/app/api/resources/route";
+import { setModerator } from "@/lib/moderation/queries";
 import { createProfile } from "@/lib/profiles/queries";
+import { RESOURCE_BUCKET } from "@/lib/resources/types";
 import { createRoom } from "@/lib/rooms/create";
 import { joinRoom, leaveRoom } from "@/lib/rooms/membership";
 import { createRoomSchema } from "@/lib/validation/rooms";
@@ -19,7 +23,8 @@ import {
   type TestUser,
 } from "./helpers/users";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Resource = {
   id: string;
@@ -45,10 +50,16 @@ async function upload(
 ): Promise<Response> {
   const form = new FormData();
   form.append("file", file);
+
   for (const [key, value] of Object.entries(fields)) {
     form.append(key, value);
   }
-  return callApi(resourcesPost, { path: "/api/resources", method: "POST", form });
+
+  return callApi(resourcesPost, {
+    path: "/api/resources",
+    method: "POST",
+    form,
+  });
 }
 
 async function listResources(query: string): Promise<Response> {
@@ -58,6 +69,7 @@ async function listResources(query: string): Promise<Response> {
 async function idsIn(query: string): Promise<string[]> {
   const response = await listResources(query);
   expect(response.status).toBe(200);
+
   const body = await readJson(response);
   return (body.resources as Resource[]).map((resource) => resource.id);
 }
@@ -83,6 +95,7 @@ function resourceCountOwnedBy(userId: string): number {
   if (!UUID_RE.test(userId)) {
     throw new Error(`Refusing to query a malformed user id: ${userId}`);
   }
+
   return Number(
     psql(
       `select count(*) from public.study_resources where owner_id = '${userId}';`,
@@ -94,6 +107,7 @@ function storedPath(resourceId: string): string | null {
   const output = psql(
     `select storage_path from public.study_resources where id = '${resourceId}';`,
   );
+
   return output === "" ? null : output;
 }
 
@@ -101,9 +115,11 @@ function storageNamesOwnedBy(userId: string): string[] {
   if (!UUID_RE.test(userId)) {
     throw new Error(`Refusing to query a malformed user id: ${userId}`);
   }
+
   const output = psql(
     `select name from storage.objects where owner = '${userId}';`,
   );
+
   return output === "" ? [] : output.split("\n");
 }
 
@@ -111,6 +127,9 @@ describe("private study files", () => {
   let alice: TestUser;
   let bob: TestUser;
   let carol: TestUser;
+  let moderator: TestUser;
+
+  let moderatorAlias: string;
   let roomId: string;
 
   let privateId = "";
@@ -129,34 +148,51 @@ describe("private study files", () => {
       ),
     );
 
+    // This user will be appointed moderator of Alice's room.
+    moderator = await createUser("res-moderator");
+    moderatorAlias = uniqueAlias("RM");
+    await createProfile(
+      moderator.client,
+      moderator.id,
+      moderatorAlias,
+    );
+
     roomId = (
       await createRoom(
         alice.client,
         createRoomSchema.parse({ name: uniqueName("Files"), capacity: 4 }),
       )
     ).id;
+
     await joinRoom(bob.client, roomId);
+    await joinRoom(moderator.client, roomId);
+
+    await setModerator(alice.client, roomId, moderatorAlias, true);
   });
 
   afterAll(async () => {
-    // Objects are removed while their owner is still signed in: the storage
-    // DELETE policy is owner-only, and a session cannot outlive its user.
-    for (const user of [alice, bob, carol]) {
+    // Remove objects while their owner is still available. These fixture
+    // clients use their own authenticated sessions, not a service-role key.
+    for (const user of [alice, bob, carol, moderator]) {
       const names = storageNamesOwnedBy(user.id);
+
       if (names.length > 0) {
         await user.client.storage.from(RESOURCE_BUCKET).remove(names);
       }
     }
+
     clearCookies();
-    await deleteUsers([alice, bob, carol]);
+    await deleteUsers([alice, bob, carol, moderator]);
   });
 
   describe("personal library", () => {
     it("stores a private file and exposes no internal columns", async () => {
       await seedSession(alice.email, alice.password);
+
       const response = await upload({ title: "Rotational motion" });
 
       expect(response.status).toBe(201);
+
       const body = await readJson(response);
       const resource = body.resource as Resource;
       privateId = resource.id;
@@ -185,6 +221,7 @@ describe("private study files", () => {
 
     it("refuses an anonymous listing", async () => {
       clearCookies();
+
       const response = await listResources("?scope=personal");
 
       expect(response.status).toBe(401);
@@ -193,9 +230,11 @@ describe("private study files", () => {
 
     it("issues the owner a short-lived signed URL", async () => {
       await seedSession(alice.email, alice.password);
+
       const response = await downloadOf(privateId);
 
       expect(response.status).toBe(200);
+
       const body = await readJson(response);
       expect(body.expires_in).toBe(300);
       expect(body.resource_id).toBe(privateId);
@@ -209,6 +248,7 @@ describe("private study files", () => {
     it("leaves the object unreachable without a signature", async () => {
       const { apiUrl } = integrationEnv();
       const path = storedPath(privateId);
+
       expect(path).not.toBeNull();
 
       const response = await fetch(
@@ -220,6 +260,7 @@ describe("private study files", () => {
 
     it("refuses to open another student's file", async () => {
       await seedSession(bob.email, bob.password);
+
       const response = await downloadOf(privateId);
 
       expect(response.status).toBe(404);
@@ -228,6 +269,17 @@ describe("private study files", () => {
 
     it("refuses to let another student delete the file", async () => {
       await seedSession(bob.email, bob.password);
+
+      const response = await deleteOf(privateId);
+
+      expect(response.status).toBe(404);
+      expect(resourceCountOwnedBy(alice.id)).toBe(1);
+      expect(storedPath(privateId)).not.toBeNull();
+    });
+
+    it("keeps personal files uploader-only even from a room moderator", async () => {
+      await seedSession(moderator.email, moderator.password);
+
       const response = await deleteOf(privateId);
 
       expect(response.status).toBe(404);
@@ -237,6 +289,7 @@ describe("private study files", () => {
 
     it("removes both the row and the object for the owner", async () => {
       await seedSession(alice.email, alice.password);
+
       const response = await deleteOf(privateId);
 
       expect(response.status).toBe(200);
@@ -252,6 +305,7 @@ describe("private study files", () => {
   describe("room sharing", () => {
     it("shares a file into a room the uploader belongs to", async () => {
       await seedSession(alice.email, alice.password);
+
       const response = await upload({
         title: "Shared problem set",
         room_id: roomId,
@@ -260,8 +314,10 @@ describe("private study files", () => {
       });
 
       expect(response.status).toBe(201);
+
       const resource = (await readJson(response)).resource as Resource;
       sharedId = resource.id;
+
       expect(resource.room_id).toBe(roomId);
       expect(resource.subject).toBe("Physics");
       expect(storedPath(sharedId)).toMatch(
@@ -273,7 +329,8 @@ describe("private study files", () => {
       await seedSession(bob.email, bob.password);
 
       expect(await idsIn(`?room_id=${roomId}`)).toContain(sharedId);
-      // Scope separation: a shared file never lands in the personal library.
+
+      // A shared file never lands in the personal library.
       expect(await idsIn("?scope=personal")).not.toContain(sharedId);
 
       const download = await downloadOf(sharedId);
@@ -294,6 +351,7 @@ describe("private study files", () => {
 
     it("does not let a member delete somebody else's upload", async () => {
       await seedSession(bob.email, bob.password);
+
       const response = await deleteOf(sharedId);
 
       expect(response.status).toBe(404);
@@ -301,15 +359,58 @@ describe("private study files", () => {
       expect(storedPath(sharedId)).not.toBeNull();
     });
 
+    it("lets an appointed moderator delete another member's upload and records an audit row", async () => {
+      // Bob uploads a shared resource.
+      await seedSession(bob.email, bob.password);
+
+      const created = await upload({
+        title: "Moderator deletion test",
+        room_id: roomId,
+      });
+
+      expect(created.status).toBe(201);
+
+      const resource = (await readJson(created)).resource as Resource;
+
+      expect(resource.room_id).toBe(roomId);
+      expect(storedPath(resource.id)).toMatch(
+        new RegExp(`^rooms/${roomId}/${bob.id}/`),
+      );
+      expect(resourceCountOwnedBy(bob.id)).toBe(1);
+
+      // The appointed moderator deletes Bob's resource.
+      await seedSession(moderator.email, moderator.password);
+
+      const response = await deleteOf(resource.id);
+
+      expect(response.status).toBe(200);
+      expect(await readJson(response)).toEqual({ deleted: true });
+
+      // Verify both the resource metadata and Storage object are gone.
+      expect(storedPath(resource.id)).toBeNull();
+      expect(resourceCountOwnedBy(bob.id)).toBe(0);
+
+      // The audit record must name the room, actor, action, and resource.
+      expect(
+        psql(
+          `select count(*) from public.moderation_actions ` +
+            `where room_id = '${roomId}' ` +
+            `and actor_id = '${moderator.id}' ` +
+            `and action = 'resource_removed' ` +
+            `and subject_ref = '${resource.id}';`,
+        ),
+      ).toBe("1");
+    });
+
     it("revokes access the moment the reader leaves the room", async () => {
       expect((await leaveRoom(bob.client, roomId)).membership).toBe("left");
 
       await seedSession(bob.email, bob.password);
+
       const listing = await listResources(`?room_id=${roomId}`);
       expect(listing.status).toBe(404);
 
-      // The download path never consults membership: only RLS does, which is
-      // what makes revocation depend on data rather than on route order.
+      // The download path relies on RLS to revoke access.
       const download = await downloadOf(sharedId);
       expect(download.status).toBe(404);
 
@@ -322,11 +423,15 @@ describe("private study files", () => {
   describe("forged input", () => {
     it("rejects an owner_id field instead of silently ignoring it", async () => {
       await seedSession(bob.email, bob.password);
-      const before = resourceCountOwnedBy(alice.id);
 
-      const response = await upload({ title: "Notes", owner_id: alice.id });
+      const before = resourceCountOwnedBy(alice.id);
+      const response = await upload({
+        title: "Notes",
+        owner_id: alice.id,
+      });
 
       expect(response.status).toBe(400);
+
       const error = errorOf(await readJson(response));
       expect(error.code).toBe("invalid_request");
       expect(error.issues).toEqual([
@@ -337,8 +442,10 @@ describe("private study files", () => {
 
     it("refuses to share into a room the caller has left", async () => {
       const before = resourceCountOwnedBy(bob.id);
-
-      const response = await upload({ title: "Notes", room_id: roomId });
+      const response = await upload({
+        title: "Notes",
+        room_id: roomId,
+      });
 
       expect(response.status).toBe(404);
       expect(errorOf(await readJson(response)).code).toBe("not_found");
@@ -347,9 +454,12 @@ describe("private study files", () => {
 
     it("refuses a file whose bytes do not match its extension", async () => {
       await seedSession(bob.email, bob.password);
-      const impostor = new File([new TextEncoder().encode("plain text")], "notes.pdf", {
-        type: "application/pdf",
-      });
+
+      const impostor = new File(
+        [new TextEncoder().encode("plain text")],
+        "notes.pdf",
+        { type: "application/pdf" },
+      );
 
       const response = await upload({ title: "Notes" }, impostor);
 
@@ -362,10 +472,14 @@ describe("private study files", () => {
     it("refuses a write into another student's personal folder", async () => {
       const { error } = await bob.client.storage
         .from(RESOURCE_BUCKET)
-        .upload(`personal/${alice.id}/intruder.pdf`, new Uint8Array([1, 2, 3]), {
-          contentType: "application/pdf",
-          upsert: false,
-        });
+        .upload(
+          `personal/${alice.id}/intruder.pdf`,
+          new Uint8Array([1, 2, 3]),
+          {
+            contentType: "application/pdf",
+            upsert: false,
+          },
+        );
 
       expect(error).not.toBeNull();
       expect(storageNamesOwnedBy(alice.id)).not.toContain(
@@ -389,9 +503,10 @@ describe("private study files", () => {
       const names = storageNamesOwnedBy(alice.id);
       expect(names.length).toBeGreaterThan(0);
 
-      // `remove` reports no error when RLS filters every row out, so the
-      // assertion has to be about the object's survival, not about the call.
+      // Storage may return no error if RLS filters out all matching rows,
+      // so assert that the other user's objects survive.
       await bob.client.storage.from(RESOURCE_BUCKET).remove(names);
+
       expect(storageNamesOwnedBy(alice.id)).toEqual(names);
     });
   });
@@ -401,6 +516,7 @@ describe("private study files", () => {
       expect(
         psql("select public from storage.buckets where id = 'study-resources';"),
       ).toBe("f");
+
       expect(
         psql(
           "select relrowsecurity from pg_class where oid = 'storage.objects'::regclass;",
@@ -414,11 +530,13 @@ describe("private study files", () => {
           "select has_column_privilege('authenticated', 'public.study_resources', 'owner_id', 'SELECT');",
         ),
       ).toBe("f");
+
       expect(
         psql(
           "select has_column_privilege('authenticated', 'public.study_resources', 'owner_id', 'INSERT');",
         ),
       ).toBe("f");
+
       expect(
         psql(
           "select has_column_privilege('authenticated', 'public.study_resources', 'storage_path', 'SELECT');",
@@ -433,7 +551,10 @@ describe("private study files", () => {
           "(owner_id, room_id, storage_path, title, original_filename, content_type, size_bytes) " +
           `values ('${alice.id}', null, '../../etc/passwd', 'x', 'x.pdf', 'application/pdf', 1);`,
       );
-      expect(wrongScope.output).toContain("study_resources_scope_matches_path");
+
+      expect(wrongScope.output).toContain(
+        "study_resources_scope_matches_path",
+      );
 
       // Under the right prefix but still not a server-built key.
       const wrongShape = psqlExpectingFailure(
@@ -441,7 +562,10 @@ describe("private study files", () => {
           "(owner_id, room_id, storage_path, title, original_filename, content_type, size_bytes) " +
           `values ('${alice.id}', null, 'personal/${alice.id}/../../x.pdf', 'x', 'x.pdf', 'application/pdf', 1);`,
       );
-      expect(wrongShape.output).toContain("study_resources_storage_path_layout");
+
+      expect(wrongShape.output).toContain(
+        "study_resources_storage_path_layout",
+      );
 
       expect(resourceCountOwnedBy(alice.id)).toBe(1);
     });
