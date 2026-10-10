@@ -220,7 +220,7 @@ export function ChatPanel({
         </p>
       ) : loadError ? (
         <div className="flex flex-col items-start gap-2">
-          <p role="alert" className="text-sm text-error">
+          <p role="alert" className="text-sm text-red-500">
             {loadError}
           </p>
           {onRetryLoad && (
@@ -283,7 +283,7 @@ export function ChatPanel({
                     )}
                     {message.status === "failed" && (
                       <span className="flex flex-wrap items-center gap-2">
-                        <span role="alert" className="text-xs text-error">
+                        <span role="alert" className="text-xs text-red-500">
                           Not sent.
                         </span>
                         {onRetrySend && (
@@ -329,7 +329,7 @@ export function ChatPanel({
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-2 border-t pt-4">
         {muted && (
-          <p role="status" className="text-sm text-warning">
+          <p role="status" className="text-sm text-amber-600">
             You are muted in this room
             {mutedUntil
               ? ` until ${mutedUntil.slice(0, 16).replace("T", " ")} UTC`
@@ -347,9 +347,9 @@ export function ChatPanel({
             placeholder={muted ? "You cannot send messages right now" : "Message the room…"}
             maxLength={CHAT_MESSAGE_MAX_LENGTH}
             disabled={muted}
-            className="min-h-16 min-w-full flex-1 resize-y sm:min-w-44"
+            className="min-h-16 min-w-44 flex-1 resize-y"
           />
-          <Button type="submit" disabled={!canSend}>
+          <Button type="submit" size="sm" disabled={!canSend}>
             Send
           </Button>
         </div>

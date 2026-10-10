@@ -114,7 +114,7 @@ export function RoomMembershipButton({
     <div className="flex flex-col gap-2">
       {control}
       {error && (
-        <p className="text-sm text-error" role="alert">
+        <p className="text-sm text-red-500" role="alert">
           {error}
         </p>
       )}

@@ -183,7 +183,7 @@ export function ResourceUploadForm({
       </div>
 
       {quotaFull && (
-        <p className="text-xs text-warning" role="status">
+        <p className="text-xs text-amber-600" role="status">
           Storage full — delete files to make room for new uploads.
         </p>
       )}
@@ -260,7 +260,7 @@ export function ResourceUploadForm({
       )}
 
       {error && (
-        <p className="text-sm text-error" role="alert">
+        <p className="text-sm text-red-500" role="alert">
           {error}
         </p>
       )}

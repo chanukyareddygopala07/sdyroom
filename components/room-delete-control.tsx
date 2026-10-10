@@ -83,9 +83,7 @@ export function RoomDeleteControl({
   return (
     <Card className="max-w-2xl border-destructive/40">
       <CardHeader>
-        <CardTitle as="h2" className="text-destructive">
-          Delete this room
-        </CardTitle>
+        <CardTitle className="text-destructive">Delete this room</CardTitle>
         <CardDescription>
           Deleting removes the room for everyone: memberships, chat history,
           focus sessions, goals, shared files and pending invitations. Members
@@ -112,7 +110,7 @@ export function RoomDeleteControl({
           </div>
 
           {error && (
-            <p className="text-sm text-error" role="alert">
+            <p className="text-sm text-red-500" role="alert">
               {error}
             </p>
           )}

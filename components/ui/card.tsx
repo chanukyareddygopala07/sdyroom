@@ -30,25 +30,15 @@ const CardHeader = React.forwardRef<
 CardHeader.displayName = "CardHeader";
 
 const CardTitle = React.forwardRef<
-  HTMLElement,
-  React.ComponentPropsWithoutRef<"div"> & {
-    /**
-     * Heading level for the card's title. Auth and onboarding cards are a
-     * page's only heading, so they pass `as="h1"`; cards nested under an
-     * existing page heading stay on the default `div`.
-     */
-    as?: "div" | "h1" | "h2" | "h3";
-  }
->(({ className, as = "div", ...props }, ref) => {
-  const Comp = as as React.ElementType;
-  return (
-    <Comp
-      ref={ref}
-      className={cn("font-semibold leading-none tracking-tight", className)}
-      {...props}
-    />
-  );
-});
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div
+    ref={ref}
+    className={cn("font-semibold leading-none tracking-tight", className)}
+    {...props}
+  />
+));
 CardTitle.displayName = "CardTitle";
 
 const CardDescription = React.forwardRef<

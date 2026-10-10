@@ -175,7 +175,7 @@ export function RoomRoster({
       </div>
 
       {error && (
-        <p role="alert" className="text-sm text-error">
+        <p role="alert" className="text-sm text-red-500">
           {error}
         </p>
       )}
@@ -262,7 +262,7 @@ export function RoomRoster({
             menuItems.push(
               <DropdownMenuItem
                 key="remove"
-                className="text-error focus:text-error"
+                className="text-red-500 focus:text-red-500"
                 onSelect={() => setRemoveTarget(member)}
               >
                 Remove from room…

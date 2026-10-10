@@ -3,7 +3,7 @@ import { Button } from "./ui/button";
 
 export function EnvVarWarning() {
   return (
-    <div className="flex flex-wrap items-center gap-4">
+    <div className="flex gap-4 items-center">
       <Badge variant={"outline"} className="font-normal">
         Supabase environment variables required
       </Badge>

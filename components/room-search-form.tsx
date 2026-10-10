@@ -28,7 +28,7 @@ export function RoomSearchForm({ className }: { className?: string }) {
   return (
     <form
       role="search"
-      className={cn("flex w-full flex-col gap-2 sm:flex-row sm:items-end", className)}
+      className={cn("flex w-full items-end gap-2", className)}
       onSubmit={(e) => {
         e.preventDefault();
         applySearch(value);
@@ -46,24 +46,19 @@ export function RoomSearchForm({ className }: { className?: string }) {
           onChange={(e) => setValue(e.target.value)}
         />
       </div>
-      <div className="flex gap-2">
-        <Button type="submit" className="flex-1 sm:flex-none">
-          Search
+      <Button type="submit">Search</Button>
+      {activeQuery && (
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            setValue("");
+            applySearch("");
+          }}
+        >
+          Clear
         </Button>
-        {activeQuery && (
-          <Button
-            type="button"
-            variant="outline"
-            className="flex-1 sm:flex-none"
-            onClick={() => {
-              setValue("");
-              applySearch("");
-            }}
-          >
-            Clear
-          </Button>
-        )}
-      </div>
+      )}
     </form>
   );
 }

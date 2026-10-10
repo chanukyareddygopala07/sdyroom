@@ -395,12 +395,10 @@ export function FocusTimer({
       </div>
 
       <div className="flex flex-col items-center gap-1 py-2">
-        {/*
-          Deliberately *not* a live region: a countdown that announced every
-          tick would make the room unusable with a screen reader. Only the
-          transitions below speak (session start, pause, resume, completion).
-        */}
-        <p className="font-mono text-5xl font-semibold tabular-nums">
+        <p
+          className="font-mono text-5xl font-semibold tabular-nums"
+          aria-live="polite"
+        >
           {session && remainingSeconds !== null
             ? session.state === "running" && remainingSeconds === 0
               ? "00:00"
@@ -491,7 +489,7 @@ export function FocusTimer({
         </div>
 
         {error && (
-          <p className="text-sm text-error" role="alert">
+          <p className="text-sm text-red-500" role="alert">
             {error}
           </p>
         )}
@@ -533,26 +531,8 @@ export function FocusTimer({
         )}
       </div>
 
-      {/*
-        Transition announcements only. The text is derived from the session's
-        state (never the ticking countdown), so a screen reader hears
-        start/pause/resume/completion once each and nothing per second.
-        `aria-live` without `role="status"` on purpose: this region is a
-        companion to the one visible `role="status"` above (the sync badge),
-        which must stay unique inside this section.
-      */}
       <p className="sr-only" aria-live="polite">
-        {!session
-          ? `${roomName}: no active session.`
-          : session.state === "running" && remainingSeconds === 0
-            ? `${roomName}: time is up.`
-            : session.state === "running"
-              ? `${roomName}: session started, ${Math.round(session.duration_seconds / 60)} minutes.`
-              : session.state === "paused"
-                ? `${roomName}: session paused.`
-                : session.state === "completed"
-                  ? `${roomName}: session completed.`
-                  : `${roomName}: session expired.`}
+        {roomName} focus timer, {session?.state ?? "idle"}.
       </p>
     </section>
   );

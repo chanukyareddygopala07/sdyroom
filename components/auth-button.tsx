@@ -15,7 +15,7 @@ export async function AuthButton() {
 
   if (!user) {
     return (
-      <div className="flex flex-wrap gap-2">
+      <div className="flex gap-2">
         <Button asChild size="sm" variant={"outline"}>
           <Link href="/auth/login">Sign in</Link>
         </Button>
@@ -34,14 +34,11 @@ export async function AuthButton() {
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 md:flex-nowrap md:justify-start md:gap-4">
+    <div className="flex items-center gap-4">
       {profile ? (
-        <span className="min-w-0 break-words">Hey, {profile.alias}!</span>
+        <span>Hey, {profile.alias}!</span>
       ) : (
-        <Link
-          href="/onboarding"
-          className="underline underline-offset-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-        >
+        <Link href="/onboarding" className="underline underline-offset-4">
           Choose a study alias
         </Link>
       )}

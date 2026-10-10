@@ -75,9 +75,7 @@ export function OnboardingForm({
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card>
         <CardHeader>
-          <CardTitle as="h1" className="text-2xl">
-            Choose a study alias
-          </CardTitle>
+          <CardTitle className="text-2xl">Choose a study alias</CardTitle>
           <CardDescription>
             This alias is how you appear in every room you join. It must be
             unique and can be changed later.
@@ -98,22 +96,14 @@ export function OnboardingForm({
                   maxLength={ALIAS_MAX_LENGTH}
                   value={alias}
                   onChange={(e) => setAlias(e.target.value)}
-                  aria-invalid={error ? true : undefined}
-                  aria-describedby={
-                    error ? "alias-error alias-help" : "alias-help"
-                  }
                 />
-                <p id="alias-help" className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   Up to {ALIAS_MAX_LENGTH} characters: letters, numbers,
                   spaces, hyphens or underscores.
                 </p>
               </div>
               {error && (
-                <p
-                  id="alias-error"
-                  className="text-sm text-error"
-                  role="alert"
-                >
+                <p className="text-sm text-red-500" role="alert">
                   {error}
                 </p>
               )}

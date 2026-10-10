@@ -3,7 +3,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import type { StudyGoal } from "@/lib/goals/types";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -213,56 +212,46 @@ export function GoalsPanel({
     >
       <h2 className="text-lg font-semibold">My goals</h2>
 
-      <form onSubmit={(event) => void createGoal(event)} className="flex flex-col gap-3">
-        <div className="grid gap-1.5">
-          <Label htmlFor={`${roomId}-goal-title`}>Goal title</Label>
+      <form onSubmit={(event) => void createGoal(event)} className="flex flex-col gap-2">
+        <Input
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="Goal title, e.g. Finish chapter 4"
+          aria-label="Goal title"
+          maxLength={120}
+          required
+        />
+        <div className="flex flex-wrap gap-2">
           <Input
-            id={`${roomId}-goal-title`}
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Finish chapter 4"
-            maxLength={120}
-            required
-            aria-invalid={error !== null || undefined}
+            type="number"
+            inputMode="numeric"
+            min={TARGET_MINUTES_MIN}
+            max={TARGET_MINUTES_MAX}
+            value={targetMinutes}
+            onChange={(event) => setTargetMinutes(event.target.value)}
+            placeholder="Minutes (optional)"
+            aria-label="Target time in minutes"
+            className="w-40"
           />
-        </div>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="grid flex-1 gap-1.5">
-            <Label htmlFor={`${roomId}-goal-minutes`}>
-              Target time in minutes
-            </Label>
-            <Input
-              id={`${roomId}-goal-minutes`}
-              type="number"
-              inputMode="numeric"
-              min={TARGET_MINUTES_MIN}
-              max={TARGET_MINUTES_MAX}
-              value={targetMinutes}
-              onChange={(event) => setTargetMinutes(event.target.value)}
-              placeholder="90 (optional)"
-            />
-          </div>
-          <div className="grid flex-1 gap-1.5">
-            <Label htmlFor={`${roomId}-goal-count`}>Target count</Label>
-            <Input
-              id={`${roomId}-goal-count`}
-              type="number"
-              inputMode="numeric"
-              min={TARGET_COUNT_MIN}
-              max={TARGET_COUNT_MAX}
-              value={targetCount}
-              onChange={(event) => setTargetCount(event.target.value)}
-              placeholder="3 (optional)"
-            />
-          </div>
-          <Button type="submit" disabled={busy} className="sm:flex-none">
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={TARGET_COUNT_MIN}
+            max={TARGET_COUNT_MAX}
+            value={targetCount}
+            onChange={(event) => setTargetCount(event.target.value)}
+            placeholder="Count (optional)"
+            aria-label="Target count"
+            className="w-40"
+          />
+          <Button type="submit" size="sm" disabled={busy}>
             {busy ? "Saving…" : "Add goal"}
           </Button>
         </div>
       </form>
 
       {error && (
-        <p className="text-sm text-error" role="alert">
+        <p className="text-sm text-red-500" role="alert">
           {error}
         </p>
       )}

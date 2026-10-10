@@ -122,7 +122,7 @@ export function ModerationInbox({
       </div>
 
       {error && (
-        <p role="alert" className="text-sm text-error">
+        <p role="alert" className="text-sm text-red-500">
           {error}
         </p>
       )}

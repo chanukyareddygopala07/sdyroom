@@ -1,14 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 
-/**
- * One class for every header link: comfortable as an inline item from `md:`
- * up, and a full-width touch target inside the mobile sheet. The desktop
- * header and the sheet render the *same* elements, so the link list cannot
- * drift between the two presentations.
- */
-const LINK_CLASS =
-  "block rounded-md px-3 py-2.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring md:inline-block md:px-2 md:py-1.5 md:hover:bg-transparent";
+const LINK_CLASS = "font-normal text-muted-foreground hover:text-foreground";
 
 /** Always available: no session read, so it can render during prerender. */
 export function NavLinks() {
