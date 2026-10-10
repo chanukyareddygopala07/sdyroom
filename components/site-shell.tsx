@@ -2,6 +2,7 @@ import { AuthButton } from "@/components/auth-button";
 import { EnvVarWarning } from "@/components/env-var-warning";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { RouteFocus } from "@/components/layout/route-focus";
+import { NotificationBellSlot } from "@/components/notifications/notification-bell-slot";
 import {
   InvitationsNavLink,
   NavLinks,
@@ -46,6 +47,16 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
     </Suspense>
   );
 
+  // PR 11: the bell lives in the header itself — visible at every width,
+  // beside the account controls on desktop and beside the menu button on
+  // mobile — so nothing is buried in the off-canvas sheet. Session-gated
+  // like the links, and therefore inside its own Suspense.
+  const notificationBell = !hasEnvVars ? null : (
+    <Suspense fallback={null}>
+      <NotificationBellSlot />
+    </Suspense>
+  );
+
   return (
     <div className="flex min-h-screen flex-col">
       <a
@@ -70,6 +81,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              {notificationBell}
               <div className="hidden md:block">{accountControls}</div>
               <div className="md:hidden">
                 <MobileNav account={accountControls}>

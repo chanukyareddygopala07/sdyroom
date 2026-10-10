@@ -7,6 +7,7 @@ import {
   RoomAccessError,
 } from "@/lib/rooms/access";
 import { createClient } from "@/lib/supabase/server";
+import { notify, roomDedupeKey } from "@/lib/notifications/write";
 import { memberAliasSchema } from "@/lib/validation/moderation";
 import { roomIdSchema } from "@/lib/validation/rooms";
 
@@ -69,6 +70,22 @@ export async function DELETE(request: NextRequest, { params }: MemberContext) {
       parsedRoomId.data,
       parsedAlias.data,
     );
+
+    // PR 11 producer: the removed member hears about it once, with a link
+    // back to the room list rather than the room they can no longer open.
+    // Best-effort — the removal already committed.
+    await notify(supabase, {
+      kind: "room",
+      type: "member_removed",
+      roomId: parsedRoomId.data,
+      targetAlias: parsedAlias.data,
+      payload: {
+        title: "You were removed",
+        body: "You are no longer a member of this room.",
+      },
+      dedupeKey: roomDedupeKey("member_removed", parsedRoomId.data),
+    });
+
     return NextResponse.json({
       removed: true,
       member_count: result.member_count,

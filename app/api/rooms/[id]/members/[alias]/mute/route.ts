@@ -9,11 +9,18 @@ import {
   RoomAccessError,
 } from "@/lib/rooms/access";
 import { createClient } from "@/lib/supabase/server";
+import { notify, roomDedupeKey } from "@/lib/notifications/write";
 import { memberAliasSchema, muteBodySchema } from "@/lib/validation/moderation";
 import { roomIdSchema } from "@/lib/validation/rooms";
 
 type MuteContext = {
   params: Promise<{ id: string; alias: string }>;
+};
+
+const MUTE_DURATION_TEXT: Record<string, string> = {
+  "1h": "an hour",
+  "24h": "24 hours",
+  "7d": "7 days",
 };
 
 /**
@@ -87,6 +94,22 @@ export async function POST(request: NextRequest, { params }: MuteContext) {
       parsedAlias.data,
       parsedMute.data.duration,
     );
+
+    // PR 11 producer: the muted member is told, in-app, why their composer
+    // went quiet. Best-effort — the mute itself already committed, and the
+    // payload carries no moderator identity (PR 09's rule extends here).
+    await notify(supabase, {
+      kind: "room",
+      type: "muted",
+      roomId: parsedRoomId.data,
+      targetAlias: parsedAlias.data,
+      payload: {
+        title: "You were muted",
+        body: `Your messages in this room are hidden for ${MUTE_DURATION_TEXT[parsedMute.data.duration]}.`,
+      },
+      dedupeKey: roomDedupeKey("muted", parsedRoomId.data),
+    });
+
     return NextResponse.json(
       {
         muted: true,

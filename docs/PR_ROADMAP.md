@@ -5,11 +5,11 @@ pull requests that finishes the product. Every PR below has a PR-ready
 implementation specification in [`docs/prs/`](prs/).
 
 > **These are specifications, not GitHub pull requests.** Most entries in
-> `docs/prs/` exist only as a spec. As of this writing GitHub shows **12 PRs
-> merged (01–12), 1 open** — [PR #13](https://github.com/chanukyareddygopala07/sdyroom/pull/13),
-> the implementation of spec PR 19 (responsive shell & accessibility) on
-> `feat/responsive-accessibility`. A spec becomes a PR only when a developer
-> creates a branch and opens one.
+> `docs/prs/` exist only as a spec. As of this writing GitHub shows **14 PRs
+> merged (01–14), 1 open** — [PR #15](https://github.com/chanukyareddygopala07/sdyroom/pull/15),
+> the implementation of spec PR 11 (notifications) on `feat/notifications`
+> (`684a7bf`). A spec becomes a PR only when a developer creates a branch and
+> opens one.
 
 ---
 
@@ -91,7 +91,7 @@ merged) plus 3 discovered during the audit (19–21). Each has a spec in
 | 08 | Room management (edit / close / delete) | [`PR-08`](prs/PR-08-room-management.md) | A | 07 | `0008` | Medium | Merged — [PR #8](https://github.com/chanukyareddygopala07/sdyroom/pull/8) (`61a99a0`) |
 | 09 | Moderation, reporting, blocking | [`PR-09`](prs/PR-09-moderation.md) | B | 07, chat | `0009` | Large | Merged — [PR #9](https://github.com/chanukyareddygopala07/sdyroom/pull/9) (`1be4633`) |
 | 10 | File & upload security hardening | [`PR-10`](prs/PR-10-resource-security.md) | B | merged main (05) | `0010` | Medium–Large | Merged — [PR #10](https://github.com/chanukyareddygopala07/sdyroom/pull/10) (`06cfea4`) |
-| 11 | Notifications | [`PR-11`](prs/PR-11-notifications.md) | A | 07, 09, 19, 20 | `0011` | Medium | Pending |
+| 11 | Notifications | [`PR-11`](prs/PR-11-notifications.md) | A | 07, 09, 19, 20 | `0012` | Medium | In review — [PR #15](https://github.com/chanukyareddygopala07/sdyroom/pull/15) (`684a7bf`) |
 | 12 | AI document processing foundation | [`PR-12`](prs/PR-12-ai-document-foundation.md) | B | merged main (05) | `0012` | Large | Pending |
 | 13 | Ask My Notes | [`PR-13`](prs/PR-13-ask-my-notes.md) | B | 12 | none | Large | Pending |
 | 14 | AI quizzes & flashcards | [`PR-14`](prs/PR-14-ai-quiz-flashcards.md) | A | 12 | `0013` | Large | Pending |
@@ -214,17 +214,17 @@ the percentages are honest ranges rounded to 5.
 | Product area | Weight | Completed | Remaining | Basis |
 | --- | --: | --: | --: | --- |
 | **Core platform** (auth, profiles, rooms, membership, focus, goals, chat, resources, CI) | 30% | **85%** | 15% | Everything runs and is tested; missing room lifecycle, alias editing, roster. |
-| **Collaboration** (presence, invites, moderation, notifications) | 20% | **65%** | 35% | Presence, invitations and moderation all shipped (06/07/09); notifications are unbuilt. |
+| **Collaboration** (presence, invites, moderation, notifications) | 20% | **80%** | 20% | Presence, invitations and moderation all shipped (06/07/09); notifications are in review on `feat/notifications`. |
 | **Resources** (private files, sharing, hardening, AI-readiness) | 15% | **70%** | 30% | Shipped, adversarially tested, and — with PR 10 merged — quota'd, rate-limited and self-cleaning; previews and AI ingestion remain. |
 | **AI** | 15% | **0%** | 100% | No dependency, no schema, no endpoint. Specified, not built. |
 | **Safety / security** | 10% | **75%** | 25% | RLS/grants/validation are genuinely strong, moderation shipped (PR 09) and rate limiting shipped (PR 10); CSP, backups and monitoring remain (PR 18). |
 | **Production readiness** | 10% | **30%** | 70% | 1078 tests and 3 CI jobs; no coverage gate, monitoring, load tests or deployment. |
 
-**Overall: ≈ 60% (roughly 57–62%).**
+**Overall: ≈ 63% (roughly 60–65%).**
 
 How to read it: the foundation is unusually solid for its size — the security
 model and test discipline are ahead of schedule — but a large slice of what
-makes SdyRoom a *product* (notifications, AI, launch readiness, the
+makes SdyRoom a *product* (AI, launch readiness, the
 mobile/a11y surface) has not started. Counting PRs says "9 of 21 merged";
 that ratio mixes deep foundation PRs with shallow ones, so trust the weighted
 table over the headcount.
@@ -241,9 +241,11 @@ table over the headcount.
 2. **PR 20 / PR 21 — Profile & settings, Quality & coverage baseline** (Dev B,
    either order). Both independent, both small, and 21's coverage gate makes
    every later PR cheaper to trust.
-3. **PR 11 — Notifications** (Dev A, after 19 + 20). The Collaboration lane is
-   otherwise clear — 06 through 09 have merged — so this is the next
-   product-facing PR once the nav it mounts in exists.
+3. **PR 11 — Notifications** (Dev A, in review on `feat/notifications`).
+   The Collaboration lane is otherwise clear — 06 through 09 have merged — and
+   PR 19's shell (the bell's home) landed as GitHub #13, so this is the
+   product-facing PR under review now. PR 20's settings page will absorb the
+   preferences form unchanged.
 
 **PR 10 has merged** (`feat/resource-security`, merge commit `06cfea4`): rate
 limiting, quotas and orphan cleanup closed the two limitations the repo used to

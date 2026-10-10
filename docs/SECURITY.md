@@ -152,6 +152,49 @@ so each rule is stated rather than implied:
   cuts the removed member off from roster, history, resources and presence
   immediately.
 
+## Notifications: who may write, who may read, who decides
+
+`0012_notifications.sql` keeps the writer surface as small as the table's:
+
+- **No application role can `INSERT`.** The table grants `authenticated`
+  only `SELECT`, `UPDATE (read_at)` and `DELETE`, all under own-row
+  policies. Rows appear through exactly two SECURITY DEFINER RPCs —
+  `push_notification` (target resolved by alias through the existing
+  `moderation_resolve_alias`) and `push_report_notification` (reporter
+  identity read from the report row, never a route body — the PR-09 rule
+  carried forward) — and a psql probe in the integration suite pins the
+  grant matrix, so a widened grant would fail the suite.
+- **The producer rule table is closed and enforced in the RPC.**
+  `invite_created` requires the caller to own the room; `muted` /
+  `member_removed` / `moderation_resolved` require owner or moderator of the
+  room; `invite_accepted`, `resource_ready`, `ai_task_complete` and `system`
+  are self-only (`p_user_id = auth.uid()`). Room-scoped checks deliberately
+  never inspect the recipient's membership — the invitee is not a member yet
+  and a removed member no longer is — and a caller aiming a self-scoped type
+  at another user is refused `not_authorized`.
+- **Prefs are checked at write time, inside the same RPC.** A muted category
+  never creates a row (`muted` envelope), so "the feature is off" needs no
+  read-side filter to stay true. `mentions_and_invites` means invites-only;
+  `system` ignores preferences and always delivers; a missing key falls back
+  to `default` → `all`. The prefs column (`profiles.notification_prefs`)
+  carries a narrow column-level update grant — nothing else on the profile
+  becomes writable through the notification surface.
+- **The reader routes are not existence oracles.** A foreign or missing id
+  is the same `404` (RLS filters other users' rows exactly like nonexistent
+  ones), the unread count goes through an invoker's-rights RPC so it can
+  only ever count the caller's own rows, and `read-all` updates exactly the
+  rows the same caller could list. `href` is derived at read time from
+  `type`/`room_id`, never stored, so no payload can smuggle a link.
+- **Live delivery inherits the same scoping.** `postgres_changes` frames are
+  filtered by `user_id=eq.<me>` *and* by the subscriber's own SELECT RLS —
+  the same server-side rule chat relies on — so a misdelivered frame is the
+  same impossibility as reading another user's row over PostgREST. The
+  polling fallback only re-reads the caller's own endpoints.
+- **Retention is an explicit, service-role-only function.**
+  `prune_notifications(before)` is granted to `service_role` alone —
+  authenticated cannot execute it (integration probe) — and no cron is
+  configured yet; the limitation is recorded in "Not covered, on purpose".
+
 ## Study resources: where the rules live
 
 | Layer | File | Rule |
@@ -179,9 +222,9 @@ Two details worth restating because they are easy to lose:
 
 | Suite | Command | What it pins down |
 | --- | --- | --- |
-| Unit | `npm test` | Validators, path building and ownership parsing, query scoping, every route's status/code matrix including the error branches, upload form and library UI behaviour (incl. size/extension preflights, quota-full locking and the friendly 409/429 copy), the invitation validators and all six invitation/roster routes, the room `PATCH`/`DELETE` routes and their owner-gate mapping, the moderation routes (report/PATCH/blocks status matrices, no reporter field accepted) and the report dialog, roster action menu, moderation inbox and muted composer, the settings and delete-danger components, the presence store, the rate-limit checker (atomic take, fail-open, `429` + `Retry-After`), the quota helpers, and the cleanup route's full status matrix |
-| Integration | `npm run test:integration` | Against the real local stack with real auth users: `tests/integration/study-resources.test.ts` (22) — privacy of columns and rows, anonymous listing, signed-URL reachability with its 300 s TTL and refusal without a signature, cross-user open/delete refusal, member read, non-member 404, **revocation on leaving**, `owner_id` rejection, impersonation of another student's folder (row *and* object), impersonation of the signed path, magic-byte mismatch, bucket privacy, `owner_id` grants, and the key-layout CHECK; `tests/integration/room-invitations.test.ts` (37) — invitation RLS and grant freezes, non-owner create refusal, alias addressing, every transition (accept/reject/revoke/expiry), the accept race against the last seat, roster denial for non-members, and policy/grant checksums; `tests/integration/room-management.test.ts` (22) — owner-gate parity for `PATCH`/`DELETE`, identity-field refusals, the capacity floor incl. a live join race, the open/close lifecycle, direct-write denial for authenticated and `anon`, the grant/function/storage-policy freezes, the in-transaction control that widens the `UPDATE` grant and still gets zero rows, and full cascade + storage-object removal on delete; `tests/integration/room-moderation.test.ts` (25) — anonymous refusals, strict report bodies, the reporter-identity response-shape and column-grant probes, self/foreign-subject refusals, the workflow with its audit rows, the mute lifecycle with a direct-insert denial, moderator appointment, blocks with one-way chat filtering and the blocked-invite round trip, member removal, cross-room isolation, audit/grant freezes, and a rolled-back control that widens a grant and still gets zero rows; `tests/integration/resource-hardening.test.ts` (25) — the `rate_limits` grant/policy/anon-execution freeze with a grant-revoke control proving RLS stands when grants are widened, `rate_limit_take` windows/rollover/oversubscription/invalid args, 413/415 plus the bucket's own oversized-put refusal reached without the app, upload- and delete-`429`s, both orphan-sweep directions scoped to the caller (plus non-member `404` and the sweep `429`), the quota chain end to end (listing matches the database, pre-check boundaries, a two-upload race resolved to exactly one winner, a direct SQL insert refused by the trigger, and freed bytes spendable the moment a delete lands), and the signed-download serve review (attachment disposition with the original name, 300 s expiry on the served response, signature absent from listings) |
-| Browser | `npm run test:e2e` | `tests/e2e/resources.spec.ts` (5) — upload through the real form, private library, room sharing and delete in Chromium; `tests/e2e/invitations.spec.ts` (4) — the invitation lifecycle in two real browsers (invite → inbox → accept, negatives for a stranger, rejection/revocation/expiry, and a full room) plus live presence annotation on the roster; `tests/e2e/room-management.spec.ts` (3) — the owner editing settings a member can see, a non-owner bounced off the settings URL, closing a room so a new student cannot join, and a name-typed delete that 404s the member's stale workspace; `tests/e2e/moderation.spec.ts` (4) — a message report reaching the owner's inbox with no reporter identity shown, one-way block filtering that leaves no trace for the blocked, an owner mute disabling the composer before a confirmed removal, and the documented refusal codes for anonymous, non-member and plain-member direct API attempts; `tests/e2e/resource-hardening.spec.ts` (5) — the oversize and wrong-extension preflights failing in the browser with nothing written, a normal upload tracked by the quota line, a psql-filled library locking the form (with the API still refusing `409` behind it), and a spent upload window answering `429` + `Retry-After` over real HTTP and inside the form |
+| Unit | `npm test` | Validators, path building and ownership parsing, query scoping, every route's status/code matrix including the error branches, upload form and library UI behaviour (incl. size/extension preflights, quota-full locking and the friendly 409/429 copy), the invitation validators and all six invitation/roster routes, the room `PATCH`/`DELETE` routes and their owner-gate mapping, the moderation routes (report/PATCH/blocks status matrices, no reporter field accepted) and the report dialog, roster action menu, moderation inbox and muted composer, the settings and delete-danger components, the presence store, the rate-limit checker (atomic take, fail-open, `429` + `Retry-After`), the quota helpers, the cleanup route's full status matrix, and the notification layer (type/href mapping, cursor codec, prefs merge, `notify()` never throwing, the list/read/read-all/prefs routes' status matrices including the both-producer retrofits, and the bell/list/preferences components) |
+| Integration | `npm run test:integration` | Against the real local stack with real auth users: `tests/integration/study-resources.test.ts` (22) — privacy of columns and rows, anonymous listing, signed-URL reachability with its 300 s TTL and refusal without a signature, cross-user open/delete refusal, member read, non-member 404, **revocation on leaving**, `owner_id` rejection, impersonation of another student's folder (row *and* object), impersonation of the signed path, magic-byte mismatch, bucket privacy, `owner_id` grants, and the key-layout CHECK; `tests/integration/room-invitations.test.ts` (37) — invitation RLS and grant freezes, non-owner create refusal, alias addressing, every transition (accept/reject/revoke/expiry), the accept race against the last seat, roster denial for non-members, and policy/grant checksums; `tests/integration/room-management.test.ts` (22) — owner-gate parity for `PATCH`/`DELETE`, identity-field refusals, the capacity floor incl. a live join race, the open/close lifecycle, direct-write denial for authenticated and `anon`, the grant/function/storage-policy freezes, the in-transaction control that widens the `UPDATE` grant and still gets zero rows, and full cascade + storage-object removal on delete; `tests/integration/room-moderation.test.ts` (25) — anonymous refusals, strict report bodies, the reporter-identity response-shape and column-grant probes, self/foreign-subject refusals, the workflow with its audit rows, the mute lifecycle with a direct-insert denial, moderator appointment, blocks with one-way chat filtering and the blocked-invite round trip, member removal, cross-room isolation, audit/grant freezes, and a rolled-back control that widens a grant and still gets zero rows; `tests/integration/resource-hardening.test.ts` (25) — the `rate_limits` grant/policy/anon-execution freeze with a grant-revoke control proving RLS stands when grants are widened, `rate_limit_take` windows/rollover/oversubscription/invalid args, 413/415 plus the bucket's own oversized-put refusal reached without the app, upload- and delete-`429`s, both orphan-sweep directions scoped to the caller (plus non-member `404` and the sweep `429`), the quota chain end to end (listing matches the database, pre-check boundaries, a two-upload race resolved to exactly one winner, a direct SQL insert refused by the trigger, and freed bytes spendable the moment a delete lands), and the signed-download serve review (attachment disposition with the original name, 300 s expiry on the served response, signature absent from listings); `tests/integration/notifications.test.ts` (23) — the grant freeze (no `INSERT` for any app role, the exact policy set, producer RPC grants, the realtime publication entry), the producer authorization rules in both directions (owner-only invites, owner-or-moderator moderation, self-only system, cross-caller refusals), preferences honored at write time (`muted` envelope, `mentions_and_invites` = invites-only, missing key → `all`), deduplication under a partial unique index (collapse updates `created_at`/`payload`, a read row never blocks), cross-user isolation reached through both the routes and psql, the two real producers end to end through their actual API routes (`invite_created` and `muted`/`member_removed`/`report_resolved` via seeded sessions), the reporter-identity guarantee (the reporter's uuid never appears in any payload and a smuggled `user_id` is refused `invalid_payload`), the retention function's service-role-only grant with an authenticated-execution denial probe, and the report-path forgery floor (a stranger driving the report producer gets the same `not_found` the PATCH route gives them) |
+| Browser | `npm run test:e2e` | `tests/e2e/resources.spec.ts` (5) — upload through the real form, private library, room sharing and delete in Chromium; `tests/e2e/invitations.spec.ts` (4) — the invitation lifecycle in two real browsers (invite → inbox → accept, negatives for a stranger, rejection/revocation/expiry, and a full room) plus live presence annotation on the roster; `tests/e2e/room-management.spec.ts` (3) — the owner editing settings a member can see, a non-owner bounced off the settings URL, closing a room so a new student cannot join, and a name-typed delete that 404s the member's stale workspace; `tests/e2e/moderation.spec.ts` (4) — a message report reaching the owner's inbox with no reporter identity shown, one-way block filtering that leaves no trace for the blocked, an owner mute disabling the composer before a confirmed removal, and the documented refusal codes for anonymous, non-member and plain-member direct API attempts; `tests/e2e/resource-hardening.spec.ts` (5) — the oversize and wrong-extension preflights failing in the browser with nothing written, a normal upload tracked by the quota line, a psql-filled library locking the form (with the API still refusing `409` behind it), and a spent upload window answering `429` + `Retry-After` over real HTTP and inside the form; `tests/e2e/notifications.spec.ts` (3) — a live invite raising the invitee's badge in an already-open tab without a reload, the click-through deep-link decrementing it durably, "Mark all read" surviving a fresh document, preferences suppressing a new producer write at the source (no badge, no row), the signed-out visitor never meeting the bell, and the header control staying operable at a phone viewport |
 
 CI runs all three (`.github/workflows/ci.yml`) with `permissions: contents: read`
 and no repository secrets.
@@ -215,6 +258,13 @@ These are known limitations, not oversights to be discovered later:
   `tests/integration/resource-hardening.test.ts`.)
 - **No service role at runtime.** No server-side code uses a service-role key;
   every request runs on the cookie-scoped, user-privileged Supabase client.
+  (One exception by design: the `prune_notifications` retention function is
+  granted to `service_role` only and is not called from any request path —
+  nothing in the app can invoke it.)
+- **Notification retention has no scheduler.** `prune_notifications(before)`
+  exists and is service-role-only, but no cron job calls it; until one is
+  configured, unread/read rows accumulate without bound per user. The
+  function is the documented manual remedy.
 
 ## Reporting
 

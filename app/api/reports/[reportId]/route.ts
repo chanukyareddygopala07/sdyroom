@@ -3,6 +3,7 @@ import { errorResponse, readJsonBody, validationResponse } from "@/lib/api/respo
 import { ModerationError } from "@/lib/moderation/errors";
 import { setReportStatus } from "@/lib/moderation/queries";
 import { createClient } from "@/lib/supabase/server";
+import { notify, reportDedupeKey } from "@/lib/notifications/write";
 import { reportIdSchema, updateReportStatusSchema } from "@/lib/validation/moderation";
 
 type ReportContext = { params: Promise<{ reportId: string }> };
@@ -62,6 +63,28 @@ export async function PATCH(request: NextRequest, { params }: ReportContext) {
       parsedReportId.data,
       parsedUpdate.data.status,
     );
+
+    // PR 11 producer: the reporter hears the outcome. The route never holds
+    // the reporter's uuid (0009: reporter_id has no SELECT grant), so the
+    // definer RPC derives the recipient from the report row; the payload
+    // says only that *a* moderator acted, never who. Best-effort — the
+    // status change already committed.
+    if (report.status === "resolved" || report.status === "dismissed") {
+      await notify(supabase, {
+        kind: "report",
+        type: "report_resolved",
+        reportId: parsedReportId.data,
+        payload: {
+          title: report.status === "resolved" ? "Report resolved" : "Report dismissed",
+          body:
+            report.status === "resolved"
+              ? "A moderator resolved the report you filed."
+              : "A moderator dismissed the report you filed.",
+        },
+        dedupeKey: reportDedupeKey(parsedReportId.data),
+      });
+    }
+
     return NextResponse.json({ report });
   } catch (error) {
     if (error instanceof ModerationError) {
