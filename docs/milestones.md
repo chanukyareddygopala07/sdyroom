@@ -20,7 +20,7 @@ Working log: what has landed, what each milestone still owes.
 | Member safety — `0009_moderation.sql` (reports, one-way blocks, mutes enforced by the insert policy, member removal, owner-appointed moderators, audit trail), moderation inbox, shared report dialog, roster action menu | `1be4633` (PR #9) | done |
 | Resource hardening — `0010_resource_hardening.sql` (`rate_limits` + `rate_limit_take`, 1 GiB/500 MiB quotas with the `study_resources_quota_guard` trigger, `resource_quota`/`resource_quota_ok`), rate limits on uploads/deletes/downloads/sweeps/reports/blocks/mutes/invites, `POST /api/resources/cleanup`, quota line + quota-full state in the upload UI | `06cfea4` (PR #10) | done |
 | Responsive shell & accessibility — skip link, `#main` landmark, route-change focus, mobile hamburger + off-canvas Sheet fed by the same nav-links list, 44px primary/icon buttons, auth-form `role="alert"` + `aria-invalid`/`aria-describedby`, real `h1` on auth/onboarding, AA error/warning text tokens, `prefers-reduced-motion`, focus timer announces transitions only | `b3acb0f` (PR #13, spec PR 19) | in review |
-| Notifications — `0011_notifications.sql` (`notifications` table with own-row RLS and **no `INSERT` grant for any role**, two SECURITY DEFINER producers with a closed rule table, prefs checked at write time, dedupe by partial unique index, invoker's-rights `notifications_unread_count()`, service-role-only `prune_notifications`), reader routes (`GET /api/notifications`, `unread-count`, `read`, `read-all`, `PATCH /api/profile/notification-prefs`), the invite + moderation producers retrofitted, header bell with a live badge (postgres_changes + focus/60s polling fallback), inbox page carrying the preferences form | `feat/notifications` (spec PR 11) | in review |
+| Notifications — `0011_notifications.sql` (`notifications` table with own-row RLS and **no `INSERT` grant for any role**, two SECURITY DEFINER producers with a closed rule table, prefs checked at write time, dedupe by partial unique index, invoker's-rights `notifications_unread_count()`, service-role-only `prune_notifications`), reader routes (`GET /api/notifications`, `unread-count`, `read`, `read-all`, `PATCH /api/profile/notification-prefs`), the invite + moderation producers retrofitted, header bell with a live badge (postgres_changes + focus/60s polling fallback), inbox page carrying the preferences form | `684a7bf` (PR #15, spec PR 11) | in review |
 
 ## Milestone D — task breakdown
 
@@ -488,7 +488,7 @@ Working log: what has landed, what each milestone still owes.
   axe/Lighthouse sweep of every component, tablet-specific layouts beyond the
   `md:` breakpoint, and a redesign of the top nav into a sidebar — the audit
   spec assumed a sidebar that the app never had.
-- **Notifications foundation in review (spec PR 11).** One `notifications`
+- **Notifications foundation in review (PR 11 / GitHub #15).** One `notifications`
   table with own-row RLS and no `INSERT` grant for any application role, two
   SECURITY DEFINER producers (`invite_created` and the moderation trio) behind
   a closed rule table, preferences honored at write time, dedupe of unread

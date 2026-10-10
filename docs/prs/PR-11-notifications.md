@@ -1,6 +1,8 @@
 # PR 11 — Notification foundation (in-app inbox, no email)
 
-**Status:** implemented on `feat/notifications`, in review.
+**Status:** implemented on `feat/notifications` —
+[PR #15](https://github.com/chanukyareddygopala07/sdyroom/pull/15) (`684a7bf`),
+in review.
 **Owner:** Dev A (OpenCode) · **Complexity:** Medium · **Migration:** `0011_notifications.sql`
 **Depends on:** PR 06 (presence events are a notification source), PR 09 (moderation actions are a source), PR 19 (bell placement lives in the responsive shell header), PR 20 (notification preferences belong to profile settings)
 
