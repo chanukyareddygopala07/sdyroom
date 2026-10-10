@@ -31,8 +31,19 @@ vi.mock("@/lib/resources/storage", async (importOriginal) => ({
 const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const RESOURCE = "44444444-4444-4444-8444-444444444444";
+const ROOM = "11111111-1111-4111-8111-111111111111";
 
-const rpc = vi.fn(async () => ({ data: true }));
+type RpcResult = {
+  data: unknown;
+  error?: { message: string } | null;
+};
+
+const rpc = vi.fn(
+  async (...args: unknown[]): Promise<RpcResult> => {
+    void args;
+    return { data: true, error: null };
+  },
+);
 
 function remove(id: string = RESOURCE) {
   return {
@@ -177,4 +188,64 @@ describe("DELETE /api/resources/[id]", () => {
     expect(body.error.code).toBe("delete_failed");
     expect(JSON.stringify(body)).not.toContain("study_resources");
   });
+  it.each(["owner", "moderator"] as const)(
+  "allows a room %s to delete another member's shared upload",
+  async (role) => {
+    findResourceLocator.mockResolvedValue({
+      id: RESOURCE,
+      room_id: ROOM,
+      storage_path: `rooms/${ROOM}/${OTHER}/${RESOURCE}.pdf`,
+    });
+
+    rpc
+      .mockResolvedValueOnce({ data: true, error: null })
+      .mockResolvedValueOnce({ data: role, error: null })
+      .mockResolvedValueOnce({
+        data: { code: "deleted", id: RESOURCE },
+        error: null,
+      });
+
+    const { request, context } = remove();
+    const response = await DELETE(request, context);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: true });
+
+    expect(rpc).toHaveBeenNthCalledWith(2, "moderation_actor_role", {
+      p_room_id: ROOM,
+    });
+
+    expect(rpc).toHaveBeenNthCalledWith(3, "delete_moderated_resource", {
+      p_resource_id: RESOURCE,
+    });
+
+    expect(removeResourceObject).toHaveBeenCalledWith(
+      expect.anything(),
+      `rooms/${ROOM}/${OTHER}/${RESOURCE}.pdf`,
+    );
+
+    expect(deleteResourceMetadata).not.toHaveBeenCalled();
+  },
+);
+
+it("denies an ordinary member deleting another member's shared upload", async () => {
+  findResourceLocator.mockResolvedValue({
+    id: RESOURCE,
+    room_id: ROOM,
+    storage_path: `rooms/${ROOM}/${OTHER}/${RESOURCE}.pdf`,
+  });
+
+  rpc
+    .mockResolvedValueOnce({ data: true, error: null })
+    .mockResolvedValueOnce({ data: "member", error: null });
+
+  const { request, context } = remove();
+  const response = await DELETE(request, context);
+
+  expect(response.status).toBe(404);
+  expect((await response.json()).error.code).toBe("not_found");
+
+  expect(removeResourceObject).not.toHaveBeenCalled();
+  expect(deleteResourceMetadata).not.toHaveBeenCalled();
+});
 });
