@@ -1,5 +1,6 @@
 "use client";
 
+import { PasswordField } from "@/components/auth/password-field";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -10,8 +11,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -44,10 +43,10 @@ export function UpdatePasswordForm({
 
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card>
-        <CardHeader>
+      <Card className="border bg-card shadow-sm">
+        <CardHeader className="text-center">
           <CardTitle as="h1" className="text-2xl">
-            Reset Your Password
+            Reset your password
           </CardTitle>
           <CardDescription>
             Please enter your new password below.
@@ -55,21 +54,17 @@ export function UpdatePasswordForm({
         </CardHeader>
         <CardContent>
           <form onSubmit={handleForgotPassword}>
-            <div className="flex flex-col gap-6">
-              <div className="grid gap-2">
-                <Label htmlFor="password">New password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="New password"
-                  required
-                  autoComplete="new-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  aria-invalid={error ? true : undefined}
-                  aria-describedby={error ? "update-password-error" : undefined}
-                />
-              </div>
+            <div className="flex flex-col gap-5">
+              <PasswordField
+                id="password"
+                label="New password"
+                required
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                error={Boolean(error)}
+                errorId="update-password-error"
+              />
               {error && (
                 <p
                   id="update-password-error"
