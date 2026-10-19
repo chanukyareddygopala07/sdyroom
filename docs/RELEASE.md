@@ -48,10 +48,10 @@ Work top to bottom; each item names the command or evidence that proves it.
    `quality` job runs it on every push).
 3. **Migrations applied.** All files in `supabase/migrations/` applied in
    order via `supabase db push` (or the hosted SQL editor). The sequence is
-   `0001`–`0013` and `0018`–`0023` — **19 files**; `0014`–`0017` never
+   `0001`–`0013` and `0018`–`0024` — **20 files**; `0014`–`0017` never
    existed and are not pending. Verify:
    `select count(*) from supabase_migrations.schema_migrations;` equals the
-   number of files in `supabase/migrations/` (19 at time of writing).
+   number of files in `supabase/migrations/` (20 at time of writing).
 4. **Health endpoints answer.** After the first production deploy:
    - `GET /api/health` → `200 { status: "ok", version, uptime_s }` — liveness,
      no dependency contact.
@@ -65,10 +65,14 @@ Work top to bottom; each item names the command or evidence that proves it.
    signal on one machine, not a capacity study — say so wherever you paste it.
 7. **Backup + restore drill executed and dated.** See the drill section
    below. An undated drill is not a drill.
-8. **Retention scheduled.** The `prune_notifications(before)` SQL function
-   exists but has no scheduler; either schedule it (Supabase → Database →
-   Cron / a scheduled Edge Function) or accept unbounded notification growth
-   as a documented limitation with an owner (see Known limitations).
+8. **Retention scheduled.** Migration `0024` installs pg_cron and books the
+   daily 03:17 UTC job that calls `prune_notifications(before)` with the
+   90-day cutoff. After the migrations are applied to production, verify:
+   `select jobname, schedule, active, username, command from cron.job where
+   jobname = 'prune_notifications';` must return exactly one active row
+   (`'17 3 * * *'`, `postgres`, the 90-day command). Record the retention
+   window in the release notes and re-check the row after any database
+   restore.
 9. **Error correlation verified in production logs.** Trigger one deliberate
    error (e.g. `POST /api/rooms` with an invalid body while unauthenticated);
    confirm the response's `request_id` appears in the platform log stream on
@@ -211,7 +215,7 @@ not during one):
 | Limitation | Impact | Disposition |
 | --- | --- | --- |
 | Chat history reconciliation now runs once per realtime (re)subscribe: the join ack triggers a catch-up read of `GET /api/rooms/[id]/messages` (newest page first, `before=` cursor until known rows, ≤ 10 pages) that merges additively into the rendered history, closing the reload race and the reconnect gap the 2026-10-19 audit found. There is deliberately still no chat poll. | A gap larger than 10×50 rows (500 messages committed while away) waits for the next reload; the badge still reports "Reconnecting…" while offline. | Fixed with regression coverage: pure merge unit tests, component tests (load gap, reconnect gap, dedupe, ordering, cursor walk, room-switch discard, auth/offline paths), an integration catch-up contract, and an e2e that kills the socket and expects the missed message after reconnect with no reload (red without the fix, green with it). |
-| `prune_notifications(before)` has no scheduler. | Notification rows grow without bound. | Launch checklist item 8 — schedule it or assign an owner. |
+| `prune_notifications(before)` is scheduled by pg_cron (migration `0024`), but only a verified `cron.job` row proves the schedule applied in that environment. | Notification rows grow without bound wherever the migration has not been applied or the job was removed (e.g. a restore without the migration history). | Local: verified by reset + integration probe (2026-10-19). Production: checklist item 8 — verify after every deploy and restore. |
 | Storage objects (uploaded PDFs) live in the storage service, not in `pg_dump`. | A database restore does not restore uploaded files. | Rely on hosted object replication; noted so it is not discovered during an incident. |
 | Platform configuration is not codified (no `vercel.json`/container), and no hosting decision is recorded in the repo. | First deploy settings live outside git; the deploy target is an inherited assumption. | Decision framing and the settings to capture: "Hosting selection" above. Record the outcome in the evidence table at first deploy. |
 | Branch protection is not enabled on `main`. | Required checks are advisory; a PR can merge red. | Enable with authorization before/at launch; until then, checklist item 1 confirms runs manually. |
@@ -340,19 +344,34 @@ docker rm -f sdyroom-restore-drill
 `prune_notifications(p_before) → integer` (migration `0012`) deletes each
 caller's notifications older than the given timestamp. It is SECURITY
 DEFINER and granted to `service_role` only — no application request can
-invoke it, so retention must be scheduled outside the request path:
+invoke it. The scheduler is pg_cron: migration `0024` installs the extension
+and books job `prune_notifications`, daily at 03:17 UTC with the 90-day
+cutoff, executing as the role that applied the migration (which owns the
+function). Inspect and confirm:
 
 ```sh
-# Manual run against the local stack (as superuser).
+# The scheduled job (one active row).
+docker exec -e PGPASSWORD=postgres supabase_db_sdyroom \
+  psql -U postgres -d postgres -c \
+  "select jobname, schedule, active, username, command from cron.job
+     where jobname = 'prune_notifications';"
+
+# Recent runs (pg_cron keeps a bounded history).
+docker exec -e PGPASSWORD=postgres supabase_db_sdyroom \
+  psql -U postgres -d postgres -c \
+  "select status, return_message, start_time from cron.job_run_details
+     order by start_time desc limit 5;"
+
+# Manual run (ad-hoc or backfill), as superuser.
 docker exec -e PGPASSWORD=postgres supabase_db_sdyroom \
   psql -U postgres -d postgres -c \
   "select public.prune_notifications(now() - interval '90 days');"
 ```
 
-On hosted Supabase, schedule the same statement via pg_cron (if enabled) or a
-scheduled Edge Function holding the service-role key. Pick a retention window
-(90 days is the default suggestion), write it down, and revisit when users ask
-"where did my old notifications go?".
+On hosted Supabase the same migration books the same job when the migrations
+are pushed; checklist item 8 is the production verification. Pick and record
+a retention window (90 days is the default suggestion), and revisit it when
+users ask "where did my old notifications go?".
 
 ## Smoke and load scripts
 

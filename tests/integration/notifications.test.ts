@@ -710,6 +710,36 @@ describe("notifications", () => {
       );
       expect(denied.status).not.toBe(0);
     });
+
+    it("retention is scheduled: pg_cron holds exactly one active job for it", async () => {
+      // Migration 0024 installs pg_cron and schedules the 90-day prune. The
+      // assertions read the catalog the runbook points operators at, so a
+      // migration that lost the job (or left a duplicate) fails here.
+      expect(psql("select count(*) from pg_extension where extname = 'pg_cron';")).toBe("1");
+
+      expect(
+        psql("select count(*) from cron.job where jobname = 'prune_notifications';"),
+      ).toBe("1");
+
+      const job = psql(
+        "select schedule || '|' || active || '|' || username || '|' || command " +
+          "from cron.job where jobname = 'prune_notifications';",
+      );
+      const [schedule, active, username, command] = job.split("|");
+      expect(schedule).toBe("17 3 * * *");
+      expect(active).toBe("true");
+      expect(username).toBe("postgres");
+      expect(command).toBe(
+        "select public.prune_notifications(now() - interval '90 days');",
+      );
+    });
+
+    it("the cron catalog is not reachable by application roles", async () => {
+      const denied = psqlExpectingFailure(
+        "set role authenticated; select count(*) from cron.job; reset role;",
+      );
+      expect(denied.status).not.toBe(0);
+    });
   });
 
   describe("report path forgery floor", () => {

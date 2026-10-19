@@ -45,7 +45,7 @@ Two rules define the codebase:
 | `lib/rooms/access.ts` | The shared membership/ownership gates (`requireRoomMembership`, `requireRoomOwner`) that give non-members the same `404` as a missing room. |
 | `lib/api/responses.ts` | The one error envelope: `{ error: { code, message, issues? } }`. |
 | `lib/supabase/` | `proxy.ts` (session refresh + page redirects), `server.ts` (cookie-scoped server client), `client.ts` (browser client). No service-role key exists in the repo. |
-| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0023` are append-only; existing files are never edited. |
+| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0013` and `0018`–`0024` are append-only (`0014`–`0017` never existed); existing files are never edited. |
 | `tests/unit` | Vitest, no network: validators, queries against fake builders, every route's status matrix, component behaviour. |
 | `tests/integration` | Vitest against the real local stack with real auth users: RLS/grant probes, RPC races, HTTP-level handler tests. Never uses a service-role key (SQL fixtures go through `docker exec psql`). |
 | `tests/e2e` | Playwright + Chromium driving the real `next dev` app: two-browser flows, WebSocket frame capture/replay, teardown scoped to a per-run user id. |
