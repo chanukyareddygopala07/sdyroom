@@ -58,13 +58,13 @@ export function RoomCard({ room }: { room: RoomSummary }) {
     : room.name;
 
   return (
-    <article className="relative flex h-full flex-col gap-3 rounded-lg border p-4">
+    <article className="relative flex h-full flex-col gap-3 rounded-xl border bg-card p-4 transition-colors hover:border-primary/40">
       <div className="flex items-start justify-between gap-3">
         <h2 className="font-semibold leading-snug">
           <Link
             href={`/rooms/${room.id}/preview`}
             aria-label={accessibleName}
-            className="focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring after:absolute after:inset-0 after:rounded-lg"
+            className="focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring after:absolute after:inset-0 after:rounded-xl"
           >
             {room.name}
           </Link>

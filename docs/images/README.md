@@ -6,6 +6,15 @@ presentation live in this directory. The project logo is checked in
 recordings are still pending — the README's Screenshots & Demo section carries a
 commented placeholder until the first real screenshot lands.
 
+## The logo
+
+`sdyroom-logo.png` is the single source of truth for the brand mark. The
+application never reads this file directly: `public/images/sdyroom-logo.png`
+(full-size copy) and `public/images/sdyroom-logo-256.png` (header-sized
+downscale) are produced from it, and `app/favicon.ico` / `app/icon.png` are
+derived the same way. When the artwork changes, regenerate all four with
+downscale-only resampling — never redraw, recolour or distort the mark.
+
 ## Checked in
 
 | File | Shows |

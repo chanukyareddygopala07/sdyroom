@@ -1,4 +1,5 @@
 import { AuthButton } from "@/components/auth-button";
+import { BrandMark } from "@/components/brand-mark";
 import { EnvVarWarning } from "@/components/env-var-warning";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { RouteFocus } from "@/components/layout/route-focus";
@@ -76,13 +77,14 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
       <RouteFocus />
       <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <nav aria-label="Main" className="flex w-full justify-center">
-          <div className="flex w-full max-w-5xl items-center justify-between gap-3 px-4 py-2.5 text-sm">
+          <div className="flex w-full max-w-6xl items-center justify-between gap-3 px-4 py-2.5 text-sm">
             <div className="flex min-w-0 items-center gap-1">
               <Link
                 href="/"
-                className="shrink-0 rounded-md px-1 py-1.5 font-semibold focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex shrink-0 items-center gap-2 rounded-md px-1 py-1.5 font-semibold focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
               >
-                SdyRoom
+                <BrandMark size={28} />
+                <span>SdyRoom</span>
               </Link>
               <div className="hidden items-center gap-1 md:flex">
                 {navigation}
@@ -99,6 +101,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </nav>
+        <div className="divider-gradient h-px" aria-hidden="true" />
       </header>
       <main
         id="main"
@@ -106,13 +109,16 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
         className="flex w-full flex-1 flex-col items-center focus:outline-none"
       >
         <div className="flex w-full flex-1 flex-col items-center gap-12">
-          <div className="flex w-full max-w-5xl flex-1 flex-col gap-10 p-5">
+          <div className="flex w-full max-w-6xl flex-1 flex-col gap-10 p-5">
             {children}
           </div>
-          <footer className="flex w-full items-center justify-center gap-8 border-t py-10 text-center text-xs">
-            <p className="text-muted-foreground">
-              SdyRoom — capacity-limited study rooms for exam prep.
-            </p>
+          <footer className="flex w-full items-center justify-center gap-4 border-t py-10 text-center text-xs">
+            <div className="flex items-center gap-2">
+              <BrandMark size={20} />
+              <p className="text-muted-foreground">
+                SdyRoom — capacity-limited study rooms for exam prep.
+              </p>
+            </div>
             <ThemeSwitcher />
           </footer>
         </div>

@@ -1,21 +1,22 @@
+import { ActiveNavLink } from "@/components/layout/active-nav-link";
 import { createClient } from "@/lib/supabase/server";
-import Link from "next/link";
 
 /**
  * One class for every header link: comfortable as an inline item from `md:`
  * up, and a full-width touch target inside the mobile sheet. The desktop
  * header and the sheet render the *same* elements, so the link list cannot
- * drift between the two presentations.
+ * drift between the two presentations. Active destinations pick up
+ * `aria-current="page"` plus a brand-tinted pill from `ActiveNavLink`.
  */
 const LINK_CLASS =
-  "block rounded-md px-3 py-2.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring md:inline-block md:px-2 md:py-1.5 md:hover:bg-transparent";
+  "block rounded-md px-3 py-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring md:inline-block md:px-2.5 md:py-1.5 md:hover:bg-transparent";
 
 /** Always available: no session read, so it can render during prerender. */
 export function NavLinks() {
   return (
-    <Link href="/rooms" className={LINK_CLASS}>
+    <ActiveNavLink href="/rooms" className={LINK_CLASS}>
       Public rooms
-    </Link>
+    </ActiveNavLink>
   );
 }
 
@@ -35,9 +36,9 @@ export async function ResourceNavLink() {
   }
 
   return (
-    <Link href="/resources" className={LINK_CLASS}>
+    <ActiveNavLink href="/resources" className={LINK_CLASS}>
       My resources
-    </Link>
+    </ActiveNavLink>
   );
 }
 
@@ -55,9 +56,9 @@ export async function InvitationsNavLink() {
   }
 
   return (
-    <Link href="/invitations" className={LINK_CLASS}>
+    <ActiveNavLink href="/invitations" className={LINK_CLASS}>
       Invitations
-    </Link>
+    </ActiveNavLink>
   );
 }
 
@@ -75,9 +76,9 @@ export async function AnalyticsNavLink() {
   }
 
   return (
-    <Link href="/analytics" className={LINK_CLASS}>
+    <ActiveNavLink href="/analytics" className={LINK_CLASS}>
       Analytics
-    </Link>
+    </ActiveNavLink>
   );
 }
 
@@ -98,8 +99,8 @@ export async function SettingsNavLink() {
   }
 
   return (
-    <Link href="/settings" className={LINK_CLASS}>
+    <ActiveNavLink href="/settings" className={LINK_CLASS}>
       Settings
-    </Link>
+    </ActiveNavLink>
   );
 }

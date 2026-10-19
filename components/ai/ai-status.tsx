@@ -94,7 +94,7 @@ export function AiDemoBanner({ text }: { text: string }) {
   return (
     <div
       role="status"
-      className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-center text-xs font-medium text-amber-700 dark:text-amber-400"
+      className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-center text-xs font-medium text-amber-800 dark:text-amber-400"
       data-testid="ai-demo-banner"
     >
       {text}

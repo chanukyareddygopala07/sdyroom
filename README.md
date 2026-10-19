@@ -323,6 +323,25 @@ Read the threat model, security coverage and known limitations in
 | Tests | [Vitest](https://vitest.dev) 5.0.3 (unit + integration), [Playwright](https://playwright.dev) 1.63 (e2e), Testing Library |
 | Linting | ESLint 9 flat config via `eslint-config-next` 16.3.8 |
 
+### Visual system
+
+- **Logo (source of truth)**: `docs/images/sdyroom-logo.png` (1254×1254
+  RGBA). The app serves downscale-only copies from `public/images/`
+  (`sdyroom-logo.png`, `sdyroom-logo-256.png`); the favicon and
+  `app/icon.png` are derived from the same artwork. Never redraw, recolour
+  or distort the mark — scale only.
+- **Tokens**: `app/globals.css` owns the Tailwind v4 `@theme` mapping and
+  the HSL variables for both themes. Dark mode is the brand's home surface
+  (ground sampled from the logo, `#030617`); light mode is a cool-paper
+  counterpart. Every foreground/background pair is WCAG 2.2 AA-checked.
+- **Brand gradients**: `bg-gradient-brand` (blue → violet, the logo's door
+  ramp — both endpoints keep white text above 4.5:1), plus
+  `bg-gradient-brand-soft`, `text-gradient-brand`, `divider-gradient` and
+  the decorative `bg-glow-brand` wash used behind the hero and auth
+  screens.
+- **Theming**: `next-themes` (class strategy, system default); the footer
+  switcher flips between light and dark.
+
 ### Pinned dependency versions
 
 All dependencies are pinned to exact versions (no `^`, `~` or `latest`) in `package.json`.
@@ -391,7 +410,7 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
 
 ##  Testing
 
-Current suite: **1634 unit** (144 files), **433 integration** (24 files), **82 e2e**
+Current suite: **1640 unit** (145 files), **433 integration** (24 files), **82 e2e**
 (20 specs).
 
 - `npm test` (alias `npm run test:unit`) runs `vitest run` over `tests/unit/**` in the

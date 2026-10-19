@@ -10,7 +10,8 @@ const defaultUrl = process.env.VERCEL_URL
 export const metadata: Metadata = {
   metadataBase: new URL(defaultUrl),
   title: "SdyRoom",
-  description: "Capacity-limited study rooms for exam prep",
+  description:
+    "Capacity-limited study rooms for exam prep — focus sessions, shared goals, resources and AI help grounded in your notes.",
 };
 
 const geistSans = Geist({
