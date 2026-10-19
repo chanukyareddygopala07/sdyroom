@@ -32,13 +32,13 @@ export default function Page({
   return (
     <AuthShell>
       <div className="flex w-full flex-col gap-6">
-        <Card>
-          <CardHeader>
+        <Card className="border bg-card shadow-sm">
+          <CardHeader className="text-center">
             <CardTitle as="h1" className="text-2xl">
-              Sorry, something went wrong.
+              Something went wrong
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="text-center">
             <Suspense>
               <ErrorContent searchParams={searchParams} />
             </Suspense>

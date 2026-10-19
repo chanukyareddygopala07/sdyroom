@@ -47,10 +47,10 @@ export function ForgotPasswordForm({
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       {success ? (
-        <Card>
-          <CardHeader>
+        <Card className="border bg-card shadow-sm">
+          <CardHeader className="text-center">
             <CardTitle as="h1" className="text-2xl">
-              Check Your Email
+              Check your email
             </CardTitle>
             <CardDescription>Password reset instructions sent</CardDescription>
           </CardHeader>
@@ -62,10 +62,10 @@ export function ForgotPasswordForm({
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardHeader>
+        <Card className="border bg-card shadow-sm">
+          <CardHeader className="text-center">
             <CardTitle as="h1" className="text-2xl">
-              Reset Your Password
+              Reset your password
             </CardTitle>
             <CardDescription>
               Type in your email and we&apos;ll send you a link to reset your
@@ -99,16 +99,16 @@ export function ForgotPasswordForm({
                   </p>
                 )}
                 <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Sending..." : "Send reset email"}
+                  {isLoading ? "Sending…" : "Send reset email"}
                 </Button>
               </div>
               <div className="mt-4 text-center text-sm">
-                Already have an account?{" "}
+                Remembered it?{" "}
                 <Link
                   href="/auth/login"
                   className="underline underline-offset-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  Login
+                  Back to sign in
                 </Link>
               </div>
             </form>

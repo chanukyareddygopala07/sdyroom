@@ -11,17 +11,17 @@ export default function Page() {
   return (
     <AuthShell>
       <div className="flex w-full flex-col gap-6">
-        <Card>
-          <CardHeader>
+        <Card className="border bg-card shadow-sm">
+          <CardHeader className="text-center">
             <CardTitle as="h1" className="text-2xl">
-              Thank you for signing up!
+              Check your email
             </CardTitle>
-            <CardDescription>Check your email to confirm</CardDescription>
+            <CardDescription>Confirm your account to continue</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="text-center">
             <p className="text-sm text-muted-foreground">
-              You&apos;ve successfully signed up. Please check your email to
-              confirm your account before signing in.
+              You&apos;re almost in. Open the confirmation link we just sent
+              to finish creating your account, then sign in.
             </p>
           </CardContent>
         </Card>

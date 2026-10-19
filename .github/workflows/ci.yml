@@ -39,6 +39,15 @@ jobs:
       - name: Environment contract
         run: npm run check:env
 
+      # next-env.d.ts is gitignored, so a fresh checkout has none until
+      # something generates it — it carries the `next/image-types` reference
+      # that types `*.png` imports (components/brand-mark.tsx) and the route
+      # type imports. Without this, `tsc --noEmit` failed with TS2307 on a
+      # clean clone while passing locally. `next typegen` produces the same
+      # artifacts `next build` would, without running a full build.
+      - name: Generate Next.js type artifacts
+        run: npx next typegen
+
       - name: Typecheck
         run: npx tsc --noEmit
 

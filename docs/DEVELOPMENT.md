@@ -22,6 +22,55 @@ section of `docs/local-supabase.md`. `.env.example` is the authoritative
 key list; `npm run check:env` fails when the code reads a key the example
 does not document.
 
+## OAuth providers (Google & GitHub)
+
+The sign-in and sign-up screens offer real Supabase OAuth for Google and
+GitHub (`components/auth/oauth-buttons.tsx` → `supabase.auth.signInWithOAuth`).
+Both return through `app/auth/callback/route.ts`, which exchanges the PKCE
+code server-side and only honours site-internal `next` targets
+(`lib/auth/safe-next.ts`). **Providers are owner-configured**: until one is
+enabled in Supabase, its button shows a friendly "isn't available right
+now" alert — never a fake success. No provider secrets live in this
+repository or in any `NEXT_PUBLIC_*` variable; local secrets enter through
+environment variables referenced from `supabase/config.toml`.
+
+### Hosted (Supabase dashboard)
+
+1. **Google**: enable Google under Authentication → Providers. Create an
+   OAuth 2.0 client in Google Cloud Console; set the authorized redirect
+   URI to the callback URL the Supabase provider page shows
+   (`https://<project-ref>.supabase.co/auth/v1/callback`). Put the client
+   ID and secret in the Supabase provider form.
+2. **GitHub**: create an OAuth App (Settings → Developer settings → OAuth
+   Apps); set the callback URL to the same Supabase-supplied
+   `…/auth/v1/callback`. Put the client ID and secret in Supabase's GitHub
+   provider form.
+3. **Redirect allowlist**: add the application URLs under Authentication →
+   URL Configuration — at minimum `https://<your-domain>/**` for hosted
+   and `http://127.0.0.1:3000/**` for local. The OAuth return leg is
+   `<origin>/auth/callback`, and password-reset emails already point at
+   `<origin>/auth/update-password`.
+
+### Local stack
+
+`supabase/config.toml` carries `[auth.external.google]` and
+`[auth.external.github]` blocks, both `enabled = false` by default:
+
+1. Create the provider apps as above, but use the **local** callback URL
+   the Supabase dashboard shows for the local project (it is also
+   `<local-url>/auth/v1/callback` — the distinction from hosted is only
+   the host: `127.0.0.1:54321` locally versus your project ref hosted).
+2. Set `enabled = true` and `client_id` in the config block; export
+   `SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET` /
+   `SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET` in the shell that runs
+   `npx supabase start` (the config reads them via `env(...)` — never
+   write the secret into the file).
+3. Restart the stack. Google locally also needs
+   `skip_nonce_check = true`, which the shipped block already sets.
+
+Hosted and local are independent: enabling a provider on the dashboard
+does not enable it in the local stack, and vice versa.
+
 ## Running the suites
 
 | Suite | Command | Needs | Notes |
