@@ -281,66 +281,76 @@ export default async function RoomWorkspacePage({ params }: RoomPageProps) {
         )}
       </header>
 
-      {/* Keyed per room like the chat: a room switch must never show the
-          previous room's members or its owner's pending invitations while
-          the new room's request is still in flight. */}
-      <RoomRoster
-        key={`roster-${room.id}`}
-        roomId={room.id}
-        members={members}
-        moderation={moderation}
-        viewerAlias={viewerAlias}
-        canAppoint={viewer_role === "owner"}
-        blockedAliases={blockedAliases}
-      />
+      {/* Desktop: a members rail beside the working column. DOM order is
+          unchanged (roster first, like the stacked phone layout), so screen
+          readers and tests see the same sequence at every width — only the
+          grid placement differs. */}
+      <div className="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
+        <div className="flex flex-col gap-6">
+          {/* Keyed per room like the chat: a room switch must never show the
+              previous room's members or its owner's pending invitations while
+              the new room's request is still in flight. */}
+          <RoomRoster
+            key={`roster-${room.id}`}
+            roomId={room.id}
+            members={members}
+            moderation={moderation}
+            viewerAlias={viewerAlias}
+            canAppoint={viewer_role === "owner"}
+            blockedAliases={blockedAliases}
+          />
 
-      {/* Owner/moderator only — the page's `can_moderate` decides whether it
-          renders at all, and the inbox's own API calls re-prove moderator
-          rights server-side on every transition. */}
-      {moderation.can_moderate && (
-        <ModerationInbox
-          key={`inbox-${room.id}`}
-          roomId={room.id}
-          initialReports={initialReports}
-        />
-      )}
+          {/* Owner/moderator only — the page's `can_moderate` decides whether it
+              renders at all, and the inbox's own API calls re-prove moderator
+              rights server-side on every transition. */}
+          {moderation.can_moderate && (
+            <ModerationInbox
+              key={`inbox-${room.id}`}
+              roomId={room.id}
+              initialReports={initialReports}
+            />
+          )}
 
-      {showInvitePanel && (
-        <RoomInvitePanel
-          key={`invite-${room.id}`}
-          roomId={room.id}
-          initialPending={pendingInvitations}
-        />
-      )}
+          {showInvitePanel && (
+            <RoomInvitePanel
+              key={`invite-${room.id}`}
+              roomId={room.id}
+              initialPending={pendingInvitations}
+            />
+          )}
+        </div>
 
-      {/* Keyed per room like the chat: the timer owns the session
-          snapshot and the `studying` flag presence reports, and neither may
-          survive a room switch while the new room's request is in flight.
-          The key is distinct from its siblings' — two children of the same
-          parent sharing a key is unsupported and can duplicate or drop
-          subtrees whenever React has to regenerate the tree. */}
-      <FocusTimer
-        key={`timer-${room.id}`}
-        roomId={room.id}
-        roomName={room.name}
-        initialSession={workspace.session}
-        initialHistory={workspace.history}
-        initialRole={workspace.viewer_role}
-        initialServerNowMs={workspace.server_now_ms}
-      />
+        <div className="flex min-w-0 flex-col gap-6">
+          {/* Keyed per room like the chat: the timer owns the session
+              snapshot and the `studying` flag presence reports, and neither may
+              survive a room switch while the new room's request is in flight.
+              The key is distinct from its siblings' — two children of the same
+              parent sharing a key is unsupported and can duplicate or drop
+              subtrees whenever React has to regenerate the tree. */}
+          <FocusTimer
+            key={`timer-${room.id}`}
+            roomId={room.id}
+            roomName={room.name}
+            initialSession={workspace.session}
+            initialHistory={workspace.history}
+            initialRole={workspace.viewer_role}
+            initialServerNowMs={workspace.server_now_ms}
+          />
 
-      <GoalsPanel roomId={room.id} initialGoals={goals} />
+          <GoalsPanel roomId={room.id} initialGoals={goals} />
 
-      {/* Keyed per room so a room switch cannot show the previous room's
-          messages or connection badge while the new channel joins. Distinct
-          key prefix for the same reason as the timer above. */}
-      <RoomChat
-        key={`chat-${room.id}`}
-        roomId={room.id}
-        initialMessages={messages}
-        viewerMuted={moderation.viewer_is_muted}
-        mutedUntil={moderation.muted_until}
-      />
+          {/* Keyed per room so a room switch cannot show the previous room's
+              messages or connection badge while the new channel joins. Distinct
+              key prefix for the same reason as the timer above. */}
+          <RoomChat
+            key={`chat-${room.id}`}
+            roomId={room.id}
+            initialMessages={messages}
+            viewerMuted={moderation.viewer_is_muted}
+            mutedUntil={moderation.muted_until}
+          />
+        </div>
+      </div>
 
       {/* Same keying rationale: files from another room must never be listed
           while the new room's request is still in flight. */}
