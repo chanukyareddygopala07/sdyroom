@@ -43,9 +43,9 @@ export function SignUpForm({
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/rooms`,
-        },
+         options: {
+         emailRedirectTo: window.location.origin,
+     },
       });
       if (error) throw error;
       // Auto-confirm creates the session immediately, so the new user goes
