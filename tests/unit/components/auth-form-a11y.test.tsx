@@ -10,22 +10,24 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { push, refresh, signInWithPassword, signUp, fetchMock } = vi.hoisted(
-  () => ({
+const { push, refresh, signInWithPassword, signUp, signInWithOAuth, fetchMock } =
+  vi.hoisted(() => ({
     push: vi.fn(),
     refresh: vi.fn(),
     signInWithPassword: vi.fn(),
     signUp: vi.fn(),
+    signInWithOAuth: vi.fn(),
     fetchMock: vi.fn(),
-  }),
-);
+  }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, refresh }),
 }));
 
 vi.mock("@/lib/supabase/client", () => ({
-  createClient: () => ({ auth: { signInWithPassword, signUp } }),
+  createClient: () => ({
+    auth: { signInWithPassword, signUp, signInWithOAuth },
+  }),
 }));
 
 function jsonResponse(status: number, body: unknown) {
@@ -42,6 +44,7 @@ describe("auth form accessibility wiring", () => {
     refresh.mockReset();
     signInWithPassword.mockReset();
     signUp.mockReset();
+    signInWithOAuth.mockReset();
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -55,7 +58,7 @@ describe("auth form accessibility wiring", () => {
     render(<LoginForm />);
 
     expect(
-      screen.getByRole("heading", { level: 1, name: "Login" }),
+      screen.getByRole("heading", { level: 1, name: "Welcome back" }),
     ).toBeInTheDocument();
   });
 
@@ -71,7 +74,7 @@ describe("auth form accessibility wiring", () => {
       target: { value: "sup3r-secret" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Login" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Email or password is incorrect.");
@@ -101,7 +104,7 @@ describe("auth form accessibility wiring", () => {
       target: { value: "a" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Sign up" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveAttribute("id", "sign-up-error");
