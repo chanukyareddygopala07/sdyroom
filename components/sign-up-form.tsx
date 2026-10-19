@@ -1,7 +1,7 @@
 "use client";
 
-import { cn } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
+import { OAuthButtons } from "@/components/auth/oauth-buttons";
+import { PasswordField } from "@/components/auth/password-field";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { createClient } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -24,18 +26,19 @@ export function SignUpForm({
   const [password, setPassword] = useState("");
   const [repeatPassword, setRepeatPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isPending, setIsPending] = useState(false);
   const router = useRouter();
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isPending) return;
     const supabase = createClient();
-    setIsLoading(true);
+    setIsPending(true);
     setError(null);
 
     if (password !== repeatPassword) {
       setError("Passwords do not match");
-      setIsLoading(false);
+      setIsPending(false);
       return;
     }
 
@@ -54,24 +57,26 @@ export function SignUpForm({
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred");
     } finally {
-      setIsLoading(false);
+      setIsPending(false);
     }
   };
 
   const errorId = "sign-up-error";
 
   return (
-    <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card>
-        <CardHeader>
+    <div className={cn("flex w-full flex-col gap-4", className)} {...props}>
+      <Card className="border bg-card shadow-sm">
+        <CardHeader className="text-center">
           <CardTitle as="h1" className="text-2xl">
-            Sign up
+            Create your SdyRoom account
           </CardTitle>
-          <CardDescription>Create a new account</CardDescription>
+          <CardDescription>
+            Join a study room, build your focus, and study together.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSignUp}>
-            <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-5">
               <div className="grid gap-2">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -86,57 +91,58 @@ export function SignUpForm({
                   aria-describedby={error ? errorId : undefined}
                 />
               </div>
-              <div className="grid gap-2">
-                <div className="flex items-center">
-                  <Label htmlFor="password">Password</Label>
-                </div>
-                <Input
-                  id="password"
-                  type="password"
-                  required
-                  autoComplete="new-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  aria-invalid={error ? true : undefined}
-                  aria-describedby={error ? errorId : undefined}
-                />
-              </div>
-              <div className="grid gap-2">
-                <div className="flex items-center">
-                  <Label htmlFor="repeat-password">Repeat Password</Label>
-                </div>
-                <Input
-                  id="repeat-password"
-                  type="password"
-                  required
-                  autoComplete="new-password"
-                  value={repeatPassword}
-                  onChange={(e) => setRepeatPassword(e.target.value)}
-                  aria-invalid={error ? true : undefined}
-                  aria-describedby={error ? errorId : undefined}
-                />
-              </div>
+              <PasswordField
+                id="password"
+                label="Password"
+                required
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                error={Boolean(error)}
+                errorId={errorId}
+              />
+              <PasswordField
+                id="repeat-password"
+                label="Repeat Password"
+                required
+                autoComplete="new-password"
+                value={repeatPassword}
+                onChange={(e) => setRepeatPassword(e.target.value)}
+                error={Boolean(error)}
+                errorId={errorId}
+              />
               {error && (
-                <p id={errorId} className="text-sm text-error" role="alert">
+                <p id={errorId} role="alert" className="text-sm text-error">
                   {error}
                 </p>
               )}
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "Creating an account..." : "Sign up"}
-              </Button>
-            </div>
-            <div className="mt-4 text-center text-sm">
-              Already have an account?{" "}
-              <Link
-                href="/auth/login"
-                className="underline underline-offset-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+              <Button
+                type="submit"
+                className="w-full bg-gradient-brand"
+                disabled={isPending}
               >
-                Login
-              </Link>
+                {isPending ? "Creating account…" : "Create account"}
+              </Button>
+              <OAuthButtons
+                intent="signup"
+                disabled={isPending}
+                onPendingChange={setIsPending}
+              />
             </div>
           </form>
         </CardContent>
       </Card>
+
+      {/* GitHub-style switching panel: one clear route to the other flow. */}
+      <div className="rounded-xl border bg-card px-4 py-3 text-center text-sm text-muted-foreground">
+        Already have an account?{" "}
+        <Link
+          href="/auth/login"
+          className="font-medium text-foreground underline underline-offset-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Sign in
+        </Link>
+      </div>
     </div>
   );
 }

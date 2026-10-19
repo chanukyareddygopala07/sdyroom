@@ -340,6 +340,31 @@ skip_nonce_check = false
 # If enabled, it will allow the user to successfully authenticate when the provider does not return an email address.
 email_optional = false
 
+# Google OAuth (owner-configured; see docs/DEVELOPMENT.md "OAuth providers").
+# Local stack: create a Google OAuth client whose authorized redirect URI is
+# the callback URL printed by the Supabase dashboard for this project, put the
+# client id here, and export SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET before
+# `npx supabase start`. Leave enabled = false until then — the app shows a
+# friendly error if a user tries an unconfigured provider.
+[auth.external.google]
+enabled = false
+client_id = ""
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
+# Local GoTrue requires the nonce check skipped for Google sign-in.
+skip_nonce_check = true
+email_optional = false
+
+# GitHub OAuth (owner-configured; see docs/DEVELOPMENT.md "OAuth providers").
+# Create a GitHub OAuth App whose callback URL is the one the Supabase
+# dashboard supplies for this project, then put the client id here and export
+# SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET before `npx supabase start`.
+[auth.external.github]
+enabled = false
+client_id = ""
+secret = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET)"
+skip_nonce_check = false
+email_optional = false
+
 # Allow Solana wallet holders to sign in to your project via the Sign in with Solana (SIWS, EIP-4361) standard.
 # You can configure "web3" rate limit in the [auth.rate_limit] section and set up [auth.captcha] if self-hosting.
 [auth.web3.solana]

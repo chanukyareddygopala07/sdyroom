@@ -55,7 +55,8 @@ export async function signUpAndOnboard(page: Page, label: string): Promise<E2EUs
   await page.locator("#email").fill(email);
   await page.locator("#password").fill(E2E_PASSWORD);
   await page.locator("#repeat-password").fill(E2E_PASSWORD);
-  await page.getByRole("button", { name: /sign up/i }).click();
+  // Exact: the sign-up page also offers "Sign up with Google/GitHub".
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.waitForURL(/\/onboarding$/);
   await waitForHydration(page, "#alias");
   await page.locator("#alias").fill(alias);
@@ -70,7 +71,8 @@ export async function login(page: Page, user: E2EUser): Promise<void> {
   await waitForHydration(page, "#email");
   await page.locator("#email").fill(user.email);
   await page.locator("#password").fill(user.password);
-  await page.getByRole("button", { name: /login/i }).click();
+  // Exact: the sign-in page also offers "Continue with Google/GitHub".
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.waitForURL(/\/rooms$/);
 }
 

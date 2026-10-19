@@ -410,7 +410,7 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
 
 ##  Testing
 
-Current suite: **1640 unit** (145 files), **433 integration** (24 files), **82 e2e**
+Current suite: **1664 unit** (147 files), **433 integration** (24 files), **82 e2e**
 (20 specs).
 
 - `npm test` (alias `npm run test:unit`) runs `vitest run` over `tests/unit/**` in the
