@@ -175,7 +175,13 @@ is intentionally empty, and local test data is made only through the Auth API an
 
 `focus_sessions` and `room_messages` are added to the `supabase_realtime`
 publication, so members' clients receive `postgres_changes` events for their room's
-session and chat and re-read the view; `notifications` (`0012`) joins the same
+session and chat and re-read the view. Chat delivery is INSERT-only, so a row
+committed between the server-rendered history read and the `SUBSCRIBED` ack
+(reload race, or a reconnect after the socket drops) would otherwise be missed:
+each ack triggers one catch-up read of `GET /api/rooms/[id]/messages`
+(newest page, then `before=` cursor until known rows, capped at 10 pages)
+that merges additively into the rendered history — a read, not a poll;
+`notifications` (`0012`) joins the same
 publication so an open tab's badge updates on insert — delivery is still filtered
 by the subscriber's own `SELECT` RLS and a `user_id=eq.<me>` frame filter;
 `study_goals` and `study_resources` are

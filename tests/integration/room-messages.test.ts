@@ -272,6 +272,38 @@ describe("room messages", () => {
       expect(oldest.body.has_more).toBe(false);
     });
 
+    it("includes a message committed after an earlier read, so catch-up closes the gap", async () => {
+      // The reconciliation path (join ack → newest-page read) depends on this
+      // contract: a row committed between a viewer's two reads must show up
+      // in the second one, exactly once and in order.
+      await as(alice);
+      const before = await getMessages("?limit=100");
+      expect(before.response.status).toBe(200);
+      const beforeIds = new Set(
+        (before.body.messages as Message[]).map((item) => item.id),
+      );
+
+      await as(bob);
+      const sent = await postMessage({ body: "Committed between reads" });
+      expect(sent.response.status).toBe(201);
+      const committed = messageOf(sent.body);
+
+      await as(alice);
+      const after = await getMessages("?limit=100");
+      expect(after.response.status).toBe(200);
+      const rows = after.body.messages as Message[];
+      const recovered = rows.filter(
+        (item) => item.body === "Committed between reads",
+      );
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0]?.id).toBe(committed.id);
+      expect(beforeIds.has(committed.id)).toBe(false);
+      // One copy of every row, still oldest-first.
+      expect(new Set(rows.map((item) => item.id)).size).toBe(rows.length);
+      const timestamps = rows.map((item) => item.created_at);
+      expect([...timestamps].sort()).toEqual(timestamps);
+    });
+
     it("rejects a malformed cursor or page size", async () => {
       await as(alice);
 

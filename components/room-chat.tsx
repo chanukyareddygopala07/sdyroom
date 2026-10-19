@@ -3,6 +3,7 @@
 import { ChatPanel } from "@/components/chat-panel";
 import { ReportDialog } from "@/components/report-dialog";
 import { clearRoomPresence, publishRoomPresence } from "@/lib/chat/presence-store";
+import { mergeChatHistory, parseHistoryPage } from "@/lib/chat/reconcile";
 import { toChatMessageView } from "@/lib/chat/queries";
 import {
   presenceChannelTopic,
@@ -49,19 +50,37 @@ function browserIsOffline(): boolean {
 }
 
 /**
+ * Bound on the catch-up walk after one ack: up to ten history pages (the
+ * endpoint's 50-row page × 10). Ordinary gaps — a reload racing a send, an
+ * outage of minutes — fit in the first page; the bound exists so a runaway
+ * walk cannot fire hundreds of requests against a very large room. A gap
+ * past the bound is left for the next reload's server-rendered window, and
+ * the merge below can only ever add rows, never misplace them.
+ */
+const MAX_RECONCILE_PAGES = 10;
+
+/**
  * Owns the chat data layer and renders the props-driven {@link ChatPanel}.
  *
  * Responsibilities, in the order they matter to the badge the user reads:
  *
  * - **History** arrives server-rendered with the workspace page — the same
  *   pattern as the timer's snapshots and the goals list — so there is no
- *   mount-time fetch to fail or flash a spinner.
- * - **Live updates** come only from a Realtime subscription on the room's
+ *   mount-time fetch to fail or flash a spinner. That render and the
+ *   subscription's join ack are separate steps, though: a row committed in
+ *   between (a reload racing a send, a message sent while the socket was
+ *   down) reaches neither path. Every join ack therefore runs one catch-up
+ *   read over the authorized `GET /api/rooms/[id]/messages` and merges it
+ *   by id (`lib/chat/reconcile.ts`) — additive, deduplicated, ordered, and
+ *   guarded against responses that land after unmount or a room switch.
+ *   That is not a poll: it happens once per ack, never on a timer.
+ * - **Live updates** come from a Realtime subscription on the room's
  *   messages — there is no chat poll to mask a dead socket — so the badge's
  *   `Live` requires the join ack (`wait: true`), and drops to `Reconnecting…`
  *   on channel errors or when the browser reports offline. The socket itself
  *   is re-dialed and re-subscribed by the Supabase client; this component
- *   never fabricates recovery it has not observed.
+ *   never fabricates recovery it has not observed, and the catch-up read
+ *   above is what fills the frames the socket missed while it was down.
  * - **Sends** are optimistic: the message appears as `pending` under the
  *   viewer's own alias, is replaced by the server row on 201, and becomes
  *   `failed` with the panel's retry control otherwise. An event confirming
@@ -265,10 +284,60 @@ export function RoomChat({
   }, []);
 
   // Realtime: history covers the past; every message from now on arrives as
-  // an event, so delivery — not a poll — is what the badge describes.
+  // an event, so delivery — not a poll — is what the badge describes. The
+  // catch-up read closes the one gap that description leaves: rows committed
+  // between the page's server-rendered history and this join ack, or while
+  // the socket was down. It runs once per ack and is best-effort — a failed
+  // read leaves the current view intact and the next ack tries again.
   useEffect(() => {
     let disposed = false;
     let channel: RealtimeChannel | null = null;
+
+    const reconcile = async () => {
+      try {
+        // Pages arrive newest-first; each older page is stitched in front of
+        // the ones already collected, so the merge sees one ascending run.
+        const collected: ChatMessageView[] = [];
+        let before: string | undefined;
+        for (let page = 0; page < MAX_RECONCILE_PAGES; page += 1) {
+          const url =
+            before === undefined
+              ? `/api/rooms/${roomId}/messages`
+              : `/api/rooms/${roomId}/messages?before=${encodeURIComponent(before)}`;
+          const response = await fetch(url);
+          // Room changed or the component unmounted while the read was in
+          // flight: the response describes a view nobody is showing any
+          // more, so it must not touch state.
+          if (disposed) return;
+          if (response?.status === 401) {
+            // Same verdict as a refused send: the session is gone, so stop
+            // looking like a live room and hand the viewer to login.
+            router.push("/auth/login");
+            return;
+          }
+          if (!response?.ok) break;
+          const payload: unknown = await response.json();
+          if (disposed) return;
+          const parsed = parseHistoryPage(payload);
+          if (parsed === null || parsed.messages.length === 0) break;
+          collected.unshift(...parsed.messages);
+
+          if (!parsed.has_more) break;
+          // The page reached rows this client already holds, so the walk
+          // has met the history it started from — anything older is already
+          // on screen (or outside the newest-page window by design).
+          const held = new Set(messagesRef.current.map((row) => row.id));
+          if (parsed.messages.some((row) => held.has(row.id))) break;
+          before = parsed.messages[0]?.id;
+        }
+
+        if (disposed || collected.length === 0) return;
+        setMessages((current) => mergeChatHistory(current, collected));
+      } catch {
+        // Best-effort: offline mid-read, a proxy error page, or a body that
+        // does not parse all mean "no new information", never a broken view.
+      }
+    };
 
     const connect = async () => {
       try {
@@ -321,6 +390,10 @@ export function RoomChat({
               }
               subscribedRef.current = true;
               setConnection("live");
+              // Join acks are the only moments frames may have been missed
+              // (first subscribe, and every rejoin after an outage), so
+              // that is exactly when catch-up reads run.
+              void reconcile();
               return;
             }
             subscribedRef.current = false;
@@ -344,7 +417,7 @@ export function RoomChat({
       subscribedRef.current = false;
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [roomId, loadViewer, supabase]);
+  }, [roomId, loadViewer, router, supabase]);
 
   // Presence: the roster rides its own private channel so the two surfaces
   // fail apart — a chat error never blanks who is here, and a refused join

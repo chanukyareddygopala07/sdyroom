@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type WebSocketRoute } from "@playwright/test";
 import {
   chatPanel,
   chatStatus,
@@ -13,10 +13,11 @@ import { signUpAndOnboard } from "./helpers/users";
 /**
  * Room chat over the real local Supabase stack.
  *
- * Delivery is proven structurally: the chat panel has no poll of its own, so
- * a message appearing in the other browser can only have come from the
- * `postgres_changes` INSERT on the WebSocket — and with no page reload the
- * rendering is entirely client-side.
+ * Delivery is proven structurally: the chat panel never polls on a timer —
+ * messages arrive from the `postgres_changes` INSERT on the WebSocket, or
+ * from the single catch-up history read that runs on a join ack
+ * (history reconciliation) — and with no page reload the rendering is
+ * entirely client-side.
  */
 test.describe("room chat in the browser", () => {
   test("two members exchange messages live, without a reload", async ({
@@ -132,6 +133,96 @@ test.describe("room chat in the browser", () => {
       expect(room.id).toBeTruthy();
     } finally {
       await ownerContext.close();
+    }
+  });
+
+  test("a message sent while the viewer is offline appears after reconnect, without a reload", async ({
+    browser,
+  }) => {
+    const ownerContext = await browser.newContext();
+    const memberContext = await browser.newContext();
+    const owner = await ownerContext.newPage();
+    const member = await memberContext.newPage();
+
+    // Own the owner's realtime socket from the first dial: `setOffline`
+    // alone only fires the browser's network events — an established
+    // WebSocket survives it, which would let the message through live and
+    // hide the defect this test exists to catch. Closing the route kills
+    // the socket; flipping `realtimeUp` lets the next retry through, which
+    // is the reconnect the fix has to recover from.
+    let realtimeUp = true;
+    let activeSocket!: WebSocketRoute | null;
+    await owner.routeWebSocket(/realtime\/v1\/websocket/, (socket) => {
+      if (!realtimeUp) {
+        socket.close();
+        return;
+      }
+      activeSocket = socket;
+      socket.connectToServer();
+    });
+
+    try {
+      await signUpAndOnboard(owner, "chat-offline-owner");
+      const room = await createRoomViaUi(owner, {
+        label: "chat-offline",
+        capacity: 4,
+      });
+      await waitForLive(owner);
+
+      await signUpAndOnboard(member, "chat-offline-member");
+      await searchRooms(member, room.name);
+      await joinRoomViaUi(member, room.name);
+      await enterRoomViaUi(member, room.name);
+      await waitForLive(member);
+
+      await expect(chatStatus(owner)).toHaveText("Live", { timeout: 30_000 });
+      await expect(chatStatus(member)).toHaveText("Live", { timeout: 30_000 });
+
+      let fullLoads = 0;
+      owner.on("load", () => {
+        fullLoads += 1;
+      });
+
+      // Outage: drop the socket and take the context offline. The badge
+      // admitting it is the precondition for the rest of the test — a
+      // channel that stayed live would deliver the message anyway.
+      realtimeUp = false;
+      await activeSocket?.close();
+      await ownerContext.setOffline(true);
+      await expect(chatStatus(owner)).toHaveText("Reconnecting…", {
+        timeout: 30_000,
+      });
+
+      // The member sends while the owner cannot receive. The row is
+      // committed server-side — proven by the sender's own row leaving
+      // "Sending…" — but no event will ever reach the closed socket.
+      await chatPanel(member)
+        .getByRole("textbox", { name: "Message" })
+        .fill("Sent while you were offline");
+      await chatPanel(member).getByRole("button", { name: "Send" }).click();
+      const fromMember = chatPanel(member).locator("li", {
+        hasText: "Sent while you were offline",
+      });
+      await expect(fromMember).toBeVisible();
+      await expect(fromMember).not.toContainText("Sending…");
+      await expect(fromMember).not.toContainText("Not sent.");
+
+      // Heal: the client re-dials, the route forwards this time, and the
+      // join ack's catch-up read is the only path that can bring the
+      // missed message in — there is no chat poll, and no reload is
+      // allowed to mask it (a reload would re-render history server-side).
+      realtimeUp = true;
+      await ownerContext.setOffline(false);
+      await expect(
+        chatPanel(owner).locator("li", {
+          hasText: "Sent while you were offline",
+        }),
+      ).toBeVisible({ timeout: 30_000 });
+      await expect(chatStatus(owner)).toHaveText("Live", { timeout: 30_000 });
+      expect(fullLoads).toBe(0);
+    } finally {
+      await ownerContext.close();
+      await memberContext.close();
     }
   });
 });

@@ -707,4 +707,385 @@ describe("RoomChat", () => {
     // An explicit leave so the server cannot keep a ghost of this viewer.
     expect(presenceChannel()?.untrack).toHaveBeenCalled();
   });
+
+  describe("history reconciliation", () => {
+    const missedRow = {
+      id: "missed-1",
+      room_id: ROOM,
+      alias: "Partner",
+      body: "Committed before the ack",
+      created_at: "2026-10-06T07:02:00.000Z",
+      is_own: false,
+    };
+
+    function page(messages: unknown[], has_more = false) {
+      return jsonResponse(200, { messages, has_more });
+    }
+
+    it("reads the newest history page after the join ack, closing the load gap", async () => {
+      renderChat();
+      await flush();
+
+      expect(mocks.fetchMock).not.toHaveBeenCalled();
+
+      mocks.fetchMock.mockResolvedValueOnce(
+        page([
+          {
+            id: "seed-1",
+            alias: "Partner",
+            body: "Earlier message",
+            created_at: "2026-10-06T07:00:00.000Z",
+            is_own: false,
+          },
+          missedRow,
+        ]),
+      );
+      await act(async () => {
+        mocks.emitStatus("SUBSCRIBED");
+      });
+      await flush();
+
+      expect(mocks.fetchMock).toHaveBeenCalledWith(
+        `/api/rooms/${ROOM}/messages`,
+      );
+      // No Realtime event for this row — only the catch-up read could have
+      // delivered it, which is exactly the reload race that lost messages.
+      expect(screen.getByText("Committed before the ack")).toBeTruthy();
+    });
+
+    it("recovers a message sent while the channel was down, on the next ack", async () => {
+      renderChat();
+      await flush();
+
+      mocks.fetchMock.mockResolvedValueOnce(
+        page([
+          {
+            id: "seed-1",
+            alias: "Partner",
+            body: "Earlier message",
+            created_at: "2026-10-06T07:00:00.000Z",
+            is_own: false,
+          },
+        ]),
+      );
+      await act(async () => {
+        mocks.emitStatus("SUBSCRIBED");
+      });
+      await flush();
+      expect(connectionText()).toBe("Live");
+
+      act(() => mocks.emitStatus("CHANNEL_ERROR"));
+      expect(connectionText()).toBe("Reconnecting…");
+
+      // The partner's message lands while this client is down, so no event
+      // is ever delivered for it; the reconnect ack must read it instead.
+      mocks.fetchMock.mockResolvedValueOnce(
+        page([
+          {
+            id: "seed-1",
+            alias: "Partner",
+            body: "Earlier message",
+            created_at: "2026-10-06T07:00:00.000Z",
+            is_own: false,
+          },
+          {
+            id: "while-down",
+            alias: "Partner",
+            body: "Sent while you were away",
+            created_at: "2026-10-06T07:04:00.000Z",
+            is_own: false,
+          },
+        ]),
+      );
+      await act(async () => {
+        mocks.emitStatus("SUBSCRIBED");
+      });
+      await flush();
+
+      expect(screen.getByText("Sent while you were away")).toBeTruthy();
+      expect(connectionText()).toBe("Live");
+    });
+
+    it("keeps one copy when a realtime event and the fetched page overlap", async () => {
+      renderChat();
+      await flush();
+
+      const inflight = deferredResponse();
+      mocks.fetchMock.mockReturnValueOnce(inflight.promise);
+
+      await act(async () => {
+        mocks.emitStatus("SUBSCRIBED");
+      });
+
+      act(() =>
+        mocks.emitInsert({
+          ...missedRow,
+          user_id: "55555555-5555-4555-8555-555555555555",
+        }),
+      );
+
+      await act(async () => {
+        inflight.resolve(
+          page([
+            {
+              id: "seed-1",
+              alias: "Partner",
+              body: "Earlier message",
+              created_at: "2026-10-06T07:00:00.000Z",
+              is_own: false,
+            },
+            missedRow,
+          ]),
+        );
+        await inflight.promise;
+      });
+      await flush();
+
+      const copies = messageItems().filter((item) =>
+        item.textContent?.includes("Committed before the ack"),
+      );
+      expect(copies).toHaveLength(1);
+    });
+
+    it("woven rows keep chronological order around live arrivals", async () => {
+      renderChat();
+      await flush();
+
+      act(() =>
+        mocks.emitInsert({
+          id: "live-later",
+          room_id: ROOM,
+          user_id: "55555555-5555-4555-8555-555555555555",
+          alias: "Partner",
+          body: "Arrived live first",
+          created_at: "2026-10-06T07:08:00.000Z",
+        }),
+      );
+
+      mocks.fetchMock.mockResolvedValueOnce(
+        page([
+          {
+            id: "seed-1",
+            alias: "Partner",
+            body: "Earlier message",
+            created_at: "2026-10-06T07:00:00.000Z",
+            is_own: false,
+          },
+          {
+            id: "gap-1",
+            alias: "Partner",
+            body: "Missed at 07:03",
+            created_at: "2026-10-06T07:03:00.000Z",
+            is_own: false,
+          },
+        ]),
+      );
+      await act(async () => {
+        mocks.emitStatus("SUBSCRIBED");
+      });
+      await flush();
+
+      const order = messageItems().map((item) => item.textContent ?? "");
+      const at = (needle: string) =>
+        order.findIndex((text) => text.includes(needle));
+      expect(messageItems()).toHaveLength(3);
+      expect(at("Earlier message")).toBe(0);
+      expect(at("Missed at 07:03")).toBe(1);
+      expect(at("Arrived live first")).toBe(2);
+    });
+
+    it("follows the has_more cursor until the pages meet the held history", async () => {
+      renderChat();
+      await flush();
+
+      mocks.fetchMock
+        .mockResolvedValueOnce(
+          page(
+            [
+              {
+                id: "gap-3",
+                alias: "Partner",
+                body: "Gap three",
+                created_at: "2026-10-06T07:13:00.000Z",
+                is_own: false,
+              },
+              {
+                id: "gap-4",
+                alias: "Partner",
+                body: "Gap four",
+                created_at: "2026-10-06T07:14:00.000Z",
+                is_own: false,
+              },
+            ],
+            true,
+          ),
+        )
+        .mockResolvedValueOnce(
+          page([
+            {
+              id: "seed-1",
+              alias: "Partner",
+              body: "Earlier message",
+              created_at: "2026-10-06T07:00:00.000Z",
+              is_own: false,
+            },
+            {
+              id: "gap-1",
+              alias: "Partner",
+              body: "Gap one",
+              created_at: "2026-10-06T07:11:00.000Z",
+              is_own: false,
+            },
+            {
+              id: "gap-2",
+              alias: "Partner",
+              body: "Gap two",
+              created_at: "2026-10-06T07:12:00.000Z",
+              is_own: false,
+            },
+          ]),
+        );
+
+      await act(async () => {
+        mocks.emitStatus("SUBSCRIBED");
+      });
+      await flush();
+
+      expect(mocks.fetchMock).toHaveBeenNthCalledWith(
+        1,
+        `/api/rooms/${ROOM}/messages`,
+      );
+      expect(mocks.fetchMock).toHaveBeenNthCalledWith(
+        2,
+        `/api/rooms/${ROOM}/messages?before=gap-3`,
+      );
+      expect(mocks.fetchMock).toHaveBeenCalledTimes(2);
+      const order = messageItems().map((item) => item.textContent ?? "");
+      const at = (needle: string) =>
+        order.findIndex((text) => text.includes(needle));
+      expect(messageItems()).toHaveLength(5);
+      expect(at("Earlier message")).toBe(0);
+      expect(at("Gap one")).toBe(1);
+      expect(at("Gap two")).toBe(2);
+      expect(at("Gap three")).toBe(3);
+      expect(at("Gap four")).toBe(4);
+    });
+
+    it("discards a response that resolves after the room changed", async () => {
+      const { rerender } = renderChat();
+      await flush();
+
+      const inflight = deferredResponse();
+      mocks.fetchMock.mockReturnValueOnce(inflight.promise);
+      await act(async () => {
+        mocks.emitStatus("SUBSCRIBED");
+      });
+
+      const otherRoom = "22222222-2222-4222-8222-222222222222";
+      rerender(<RoomChat roomId={otherRoom} initialMessages={[seeded]} />);
+      await flush();
+
+      await act(async () => {
+        inflight.resolve(
+          page([
+            {
+              id: "seed-1",
+              alias: "Partner",
+              body: "Earlier message",
+              created_at: "2026-10-06T07:00:00.000Z",
+              is_own: false,
+            },
+            {
+              id: "from-old-room",
+              alias: "Partner",
+              body: "Leaked from the previous room",
+              created_at: "2026-10-06T07:05:00.000Z",
+              is_own: false,
+            },
+          ]),
+        );
+        await inflight.promise;
+      });
+      await flush();
+
+      expect(screen.queryByText("Leaked from the previous room")).toBeNull();
+    });
+
+    it("sends the viewer to login when catch-up meets a 401", async () => {
+      renderChat();
+      await flush();
+
+      mocks.fetchMock.mockResolvedValueOnce(
+        jsonResponse(401, { error: { code: "unauthenticated" } }),
+      );
+      await act(async () => {
+        mocks.emitStatus("SUBSCRIBED");
+      });
+      await flush();
+
+      expect(mocks.router.push).toHaveBeenCalledWith("/auth/login");
+      expect(screen.getByText("Earlier message")).toBeTruthy();
+    });
+
+    it("leaves the view untouched when the catch-up read fails", async () => {
+      renderChat();
+      await flush();
+
+      mocks.fetchMock.mockRejectedValueOnce(new Error("offline"));
+      await act(async () => {
+        mocks.emitStatus("SUBSCRIBED");
+      });
+      await flush();
+
+      expect(screen.getByText("Earlier message")).toBeTruthy();
+      expect(connectionText()).toBe("Live");
+      expect(mocks.router.push).not.toHaveBeenCalled();
+    });
+
+    it("does not fetch while the browser is offline, and catches up when live returns", async () => {
+      const original = window.navigator.onLine;
+      Object.defineProperty(window.navigator, "onLine", {
+        value: false,
+        configurable: true,
+      });
+
+      try {
+        renderChat();
+        await flush();
+
+        await act(async () => {
+          mocks.emitStatus("SUBSCRIBED");
+        });
+        expect(mocks.fetchMock).not.toHaveBeenCalled();
+
+        Object.defineProperty(window.navigator, "onLine", {
+          value: true,
+          configurable: true,
+        });
+        mocks.fetchMock.mockResolvedValueOnce(
+          page([
+            {
+              id: "seed-1",
+              alias: "Partner",
+              body: "Earlier message",
+              created_at: "2026-10-06T07:00:00.000Z",
+              is_own: false,
+            },
+          ]),
+        );
+        await act(async () => {
+          mocks.emitStatus("SUBSCRIBED");
+        });
+        await flush();
+
+        expect(mocks.fetchMock).toHaveBeenCalledTimes(1);
+        expect(connectionText()).toBe("Live");
+      } finally {
+        Object.defineProperty(window.navigator, "onLine", {
+          value: original,
+          configurable: true,
+        });
+      }
+    });
+  });
 });

@@ -1,13 +1,15 @@
 # Release runbook
 
-Launch checklist, pre-deployment gates, environment matrix, rollback and
-recovery procedures, known limitations, evidence tiers, and backup/restore
-drills for SdyRoom. Everything here assumes the deploy target is Vercel +
-Supabase hosted; the local stack (`docs/local-supabase.md`) is for development
-and CI only. Platform configuration is **not codified in this repository**
-(there is no `vercel.json`, Dockerfile or deploy workflow) — record the
-project settings used for the first production deploy in the evidence table
-below rather than assuming they are in git.
+Launch checklist, pre-deployment gates, environment matrix, hosting selection,
+rollback and recovery procedures, known limitations, evidence tiers, and
+backup/restore drills for SdyRoom. Everything here assumes the deploy target is
+Vercel + Supabase hosted — that is a **working assumption, not a decision
+recorded in this repository** (see "Hosting selection"): the local stack
+(`docs/local-supabase.md`) is for development and CI only. Platform
+configuration is **not codified in this repository** (there is no `vercel.json`,
+Dockerfile or deploy workflow) — record the project settings used for the first
+production deploy in the evidence table below rather than assuming they are in
+git.
 
 ## Pre-deployment gates
 
@@ -37,6 +39,9 @@ Work top to bottom; each item names the command or evidence that proves it.
 1. **Gates green.** Every command in the table above passes locally, and the
    CI run for the release SHA is green — open the run and confirm all three
    jobs (quality, integration, e2e), not just the workflow's overall icon.
+   Branch protection is not enabled yet; the proposed policy (below,
+   "Branch protection") would make this check enforced rather than
+   ceremonial — enable it with owner approval before launch.
 2. **Environment matrix complete.** Every production-required key in the
    matrix below is set in the production project (Vercel → Settings →
    Environment Variables), and `npm run check:env` passes in CI (the
@@ -95,6 +100,31 @@ drift between the codebase's `process.env` reads and this file.
 
 Secrets belong in the platform's secret store, never in `.env` files committed
 to the repository.
+
+## Hosting selection
+
+**No hosting decision is recorded in this repository.** Evidence, checked
+2026-10-19: no `vercel.json`, `netlify.toml`, Dockerfile, `fly.toml,
+`render.yaml` or deploy workflow exists; no hosting provider appears in
+`package.json`; the README states there is no live public deployment; the
+`VERCEL_URL` environment key is a platform convenience, not a choice. The
+Vercel + Supabase-hosted assumption this runbook carries is inherited from the
+original project brief and has never been exercised.
+
+| Option | Fit | Cost of choosing it |
+| --- | --- | --- |
+| **Vercel (or comparable Next PaaS) + Supabase hosted** — the working assumption | Zero-config Next 16 builds; the environment matrix and `VERCEL_URL` key are already Vercel-shaped; Supabase is the data layer the app is written against | Record the project settings at first deploy (below); no repo changes required to start |
+| **Self-container (Fly/Railway/ECS)** | Full control over the Node runtime and regions | A Dockerfile and deploy workflow must be written and owned; more moving parts before first launch |
+| **VPS + process manager** | Cheapest steady-state, simplest mental model | Everything operational — TLS, restarts, log rotation — is manual |
+
+**Recommendation:** stay with the working assumption (a Next-compatible PaaS +
+Supabase hosted) until there is a concrete reason not to; it is the smallest
+path to a first production evidence row. Nothing here deploys anything: no
+platform account was contacted, no paid resource was created, and the decision
+remains the owner's. When it is made, capture in the evidence table: provider
+and region, Node version (`.nvmrc`), build command (`npm run build`), start
+behaviour (`npm run start` or the platform's Next runtime), the environment
+matrix keys actually set, and where previews/rollbacks live.
 
 ## Build, start and smoke
 
@@ -157,18 +187,71 @@ afterwards:**
 - **Suspected compromise:** rotate keys in the platform secret store, roll
   back the code, and follow `docs/SECURITY.md` before re-launching.
 
+**Known recovery gaps** (checked 2026-10-19 — state them before an incident,
+not during one):
+
+- **Point-in-time recovery is unconfigured.** No hosted project exists yet, so
+  no PITR window has been chosen, paid for or exercised. Until one is, the
+  only restore points are the hosted plan's scheduled backups and any manual
+  take-an-on-demand backup before a risky migration (drill section below).
+  Record the plan's backup cadence and PITR window in the evidence table when
+  the hosting decision lands.
+- **Storage objects are not in `pg_dump`.** Uploaded PDFs live in the storage
+  service; a database restore brings back buckets, policies and metadata but
+  zero files. Recovery is re-upload (and re-ingest for AI features) — there is
+  no automated object-restore path in this repository, and relying on hosted
+  object replication is a bet, not a procedure.
+- **Platform configuration lives only in the provider console.** Domain, env
+  matrix keys, plan tier and log retention exist nowhere in git; restoring
+  into a fresh project means rebuilding them by hand from this runbook.
+- **A database restore must re-verify scheduled jobs.** The pg_cron retention
+  job (migration `0024`, once merged) is database state: after any restore,
+  re-check the `cron.job` row per checklist item 8 — a dump taken before the
+  migration, or a restore path that skipped the `cron` schema, silently
+  returns the system to unbounded notification growth.
+
 ## Known limitations
 
 | Limitation | Impact | Disposition |
 | --- | --- | --- |
-| Chat has no history reconciliation on (re)subscribe. A message committed between the server-rendered history read and the realtime subscription (page load, reload, or a reconnect after the socket drops) is not shown until the viewer reloads again; there is deliberately no chat poll, and the badge honestly reports "Reconnecting…" while offline. | A viewer can silently miss a chat message sent during their own reload or an outage window. | Documented (found by the 2026-10-19 release-readiness audit; the e2e moderation test now waits for the send to be server-confirmed before reloading). Proposed follow-up: reconcile once per (re)subscribe via the existing `GET /api/rooms/[id]/messages`. |
+| Chat history reconciliation now runs once per realtime (re)subscribe: the join ack triggers a catch-up read of `GET /api/rooms/[id]/messages` (newest page first, `before=` cursor until known rows, ≤ 10 pages) that merges additively into the rendered history, closing the reload race and the reconnect gap the 2026-10-19 audit found. There is deliberately still no chat poll. | A gap larger than 10×50 rows (500 messages committed while away) waits for the next reload; the badge still reports "Reconnecting…" while offline. | Fixed with regression coverage: pure merge unit tests, component tests (load gap, reconnect gap, dedupe, ordering, cursor walk, room-switch discard, auth/offline paths), an integration catch-up contract, and an e2e that kills the socket and expects the missed message after reconnect with no reload (red without the fix, green with it). |
 | `prune_notifications(before)` is scheduled by pg_cron (migration `0024`), but only a verified `cron.job` row proves the schedule applied in that environment. | Notification rows grow without bound wherever the migration has not been applied or the job was removed (e.g. a restore without the migration history). | Local: verified by reset + integration probe (2026-10-19). Production: checklist item 8 — verify after every deploy and restore. |
 | Storage objects (uploaded PDFs) live in the storage service, not in `pg_dump`. | A database restore does not restore uploaded files. | Rely on hosted object replication; noted so it is not discovered during an incident. |
-| Platform configuration is not codified (no `vercel.json`/container). | First deploy settings live outside git. | Record them in the evidence table at first deploy. |
+| Platform configuration is not codified (no `vercel.json`/container), and no hosting decision is recorded in the repo. | First deploy settings live outside git; the deploy target is an inherited assumption. | Decision framing and the settings to capture: "Hosting selection" above. Record the outcome in the evidence table at first deploy. |
 | Branch protection is not enabled on `main`. | Required checks are advisory; a PR can merge red. | Enable with authorization before/at launch; until then, checklist item 1 confirms runs manually. |
 | No down migrations. | Schema rollback is forward-fix only. | By design — see Rollback. |
 | `supabase/seed.sql` is intentionally empty. | No demo/seed data ships with the repo. | By design — no seed data can leak into a production database. |
 | `npm run smoke` / `npm run load:sanity` are smoke-level, single-machine checks. | They prove the deploy answers correctly, not that it scales. | Pair with platform metrics after launch. |
+
+## Branch protection (proposed — requires owner approval)
+
+`main` currently accepts a direct push and a merge with red checks: GitHub
+returns `404` for both branch-protection rules and repository rulesets
+(verified 2026-10-19 — nothing is enabled). The policy below is a
+**proposal only**; it has not been applied and must not be applied without the
+owner's explicit approval. It targets a small team: enough enforcement that
+"green on main" means something, without review bottlenecks that invite
+rubber-stamping.
+
+| Setting | Proposed value | Why |
+| --- | --- | --- |
+| Require a pull request before merging | yes, at least 1 approving review | Work lands through a reviewable diff, never as a surprise push |
+| Dismiss stale pull request approvals when new commits are pushed | yes | An approval never covers code that has since changed |
+| Require review from Code Owners | off for now | No `CODEOWNERS` file exists yet; adding the requirement first would block everything |
+| Required status checks | `quality`, `integration`, `e2e` (the three job names in `.github/workflows/ci.yml`), strict branch up-to-date checking | A red gate blocks the merge, and the merge cannot race an out-of-date base |
+| Require all conversations to be resolved | yes | Review threads do not linger at merge time |
+| Do not allow bypassing the above settings | yes | An admin bypass would make the whole policy advisory again |
+| Restrict force-pushes and deletions of `main` | yes | History and the protected checks stay trustworthy |
+| Require linear history | **owner's call** | Clean log, but it forbids merge commits — decide the merge style (squash vs merge) first |
+
+Apply only with approval — the settings live under *Settings → Branches /
+Rulesets*; the equivalent ruleset can also be expressed as a `ruleset` block
+or a `gh api` call, both of which belong in the owner's hands, not in an
+agent's unattended run. After enabling, prove it once: open a draft PR, push a
+commit that fails a gate, and watch the merge button stay disabled.
+
+Interim posture until then: checklist item 1 confirms every required run by
+hand on the release SHA.
 
 ## Evidence tiers
 
@@ -178,7 +261,10 @@ CI evidence never substitutes for production evidence.
 | Tier | What proves it | Status (2026-10-19) |
 | --- | --- | --- |
 | **Local** (this machine, audit branch) | The full pre-deployment gates table | Green: lint, `tsc`, `check:env` (8 keys), `check:links` (32 files), unit 1614/1614 with coverage 75.6% statements / 66.0% branches (floors 74/64), integration 430/430 against a fresh `db reset` (19 migrations), e2e 81/81, `build`, smoke 5/5, load-sanity 400/400 (p50 13 ms, p95 45 ms), restore drill **pass** (see log below). |
-| **CI** (GitHub Actions, `main`) | Workflow runs on the exact SHA | Green: run `39221176205` on merge commit `70fb971`; earlier `39216646842` (`bde09d1`) and `39214385915` (`facc1b4`). |
+| **Local** (chat reconciliation branch) | The same gates on `fix/chat-history-reconciliation` | Green: unit 1634/1634 (144 files) with coverage 75.8% statements / 66.3% branches, integration 431/431, e2e 82/82, plus lint/`tsc`/env/links/counts/build. The e2e was captured red without the fix (missed message after reconnect) and green with it. |
+| **Local** (notification retention branch) | The same gates on `chore/notification-retention-cron` | Green: unit 1614/1614 with coverage 75.6%/66.0%, integration 432/432 (includes the new `cron.job` probes), e2e 81/81, plus lint/`tsc`/env/links/counts/build; fresh `db reset` applied 20 migrations and the scheduled job was observed firing to `succeeded`. |
+| **CI** (GitHub Actions, `main`) | Workflow runs on the exact SHA | Green: run `39221176205` on merge commit `70fb971`; earlier `39216646842` (`bde09d1`) and `39214385915` (`facc1b4`). Per-branch runs for the two open PRs are linked from those PRs. |
+| **Staging** | A deployed preview with smoke against it | **None — no staging environment exists.** Nothing is deployed anywhere; create one only with the owner's approval and a chosen host (see Hosting selection). |
 | **Production** (hosted URL) | Checklist items 4–6 and 9 against the live domain; hosted backup drill | **Pending — nothing is deployed yet.** No production URL, dashboard or log stream exists to evidence. |
 
 ## Backup and restore drill

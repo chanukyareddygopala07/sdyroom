@@ -391,7 +391,7 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
 
 ##  Testing
 
-Current suite: **1614 unit** (143 files), **432 integration** (24 files), **81 e2e**
+Current suite: **1634 unit** (144 files), **433 integration** (24 files), **82 e2e**
 (20 specs).
 
 - `npm test` (alias `npm run test:unit`) runs `vitest run` over `tests/unit/**` in the
@@ -568,7 +568,7 @@ commands.
 | [docs/API_CONTRACTS.md](docs/API_CONTRACTS.md) | What every endpoint accepts and returns |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, security coverage, known limitations |
 | [docs/local-supabase.md](docs/local-supabase.md) | Local database: schema, grants, policies, verification |
-| [docs/RELEASE.md](docs/RELEASE.md) | Pre-deployment gates, launch checklist, environment matrix, rollback/recovery, evidence tiers, retention and backup/restore drills |
+| [docs/RELEASE.md](docs/RELEASE.md) | Pre-deployment gates, launch checklist, environment matrix, hosting selection, branch protection policy (proposed), rollback/recovery with known recovery gaps, evidence tiers, retention and backup/restore drills |
 | [docs/PR_ROADMAP.md](docs/PR_ROADMAP.md) · [docs/milestones.md](docs/milestones.md) | What shipped, what is next, in what order |
 | [docs/prs/](docs/prs/) | Per-PR specifications and reconciliation notes |
 | [tests/integration/README.md](tests/integration/README.md) · [tests/e2e/README.md](tests/e2e/README.md) | How the suites run and what they prove |
