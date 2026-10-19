@@ -11,6 +11,7 @@ import { type NextRequest } from "next/server";
  */
 const ALLOWED_OTP_TYPES = new Set<string>([
   "signup",
+  "email",
   "invite",
   "email_change",
   "recovery",
