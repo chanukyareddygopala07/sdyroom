@@ -569,6 +569,7 @@ commands.
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, security coverage, known limitations |
 | [docs/local-supabase.md](docs/local-supabase.md) | Local database: schema, grants, policies, verification |
 | [docs/RELEASE.md](docs/RELEASE.md) | Pre-deployment gates, launch checklist, environment matrix, hosting selection, branch protection policy (proposed), rollback/recovery with known recovery gaps, evidence tiers, retention and backup/restore drills |
+| [docs/STAGING.md](docs/STAGING.md) | Private staging setup (Vercel preview + dedicated Supabase project), env scoping, pg_cron verification, and the staging verification matrix |
 | [docs/PR_ROADMAP.md](docs/PR_ROADMAP.md) · [docs/milestones.md](docs/milestones.md) | What shipped, what is next, in what order |
 | [docs/prs/](docs/prs/) | Per-PR specifications and reconciliation notes |
 | [tests/integration/README.md](tests/integration/README.md) · [tests/e2e/README.md](tests/e2e/README.md) | How the suites run and what they prove |

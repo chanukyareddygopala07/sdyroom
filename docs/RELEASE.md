@@ -9,7 +9,9 @@ recorded in this repository** (see "Hosting selection"): the local stack
 configuration is **not codified in this repository** (there is no `vercel.json`,
 Dockerfile or deploy workflow) — record the project settings used for the first
 production deploy in the evidence table below rather than assuming they are in
-git.
+git. The operator runbook for a private staging environment (Vercel preview +
+dedicated Supabase project, verification matrix, `cron.job` check) lives in
+`docs/STAGING.md`.
 
 ## Pre-deployment gates
 
@@ -264,7 +266,7 @@ CI evidence never substitutes for production evidence.
 | **Local** (chat reconciliation branch) | The same gates on `fix/chat-history-reconciliation` | Green: unit 1634/1634 (144 files) with coverage 75.8% statements / 66.3% branches, integration 431/431, e2e 82/82, plus lint/`tsc`/env/links/counts/build. The e2e was captured red without the fix (missed message after reconnect) and green with it. |
 | **Local** (notification retention branch) | The same gates on `chore/notification-retention-cron` | Green: unit 1614/1614 with coverage 75.6%/66.0%, integration 432/432 (includes the new `cron.job` probes), e2e 81/81, plus lint/`tsc`/env/links/counts/build; fresh `db reset` applied 20 migrations and the scheduled job was observed firing to `succeeded`. |
 | **CI** (GitHub Actions, `main`) | Workflow runs on the exact SHA | Green: run `39221176205` on merge commit `70fb971`; earlier `39216646842` (`bde09d1`) and `39214385915` (`facc1b4`). Per-branch runs for the two open PRs are linked from those PRs. |
-| **Staging** | A deployed preview with smoke against it | **None — no staging environment exists.** Nothing is deployed anywhere; create one only with the owner's approval and a chosen host (see Hosting selection). |
+| **Staging** | A deployed preview with smoke against it | **None — no staging environment exists.** The full setup and verification runbook is `docs/STAGING.md`; create one only with the owner's approval and a chosen host (see Hosting selection). |
 | **Production** (hosted URL) | Checklist items 4–6 and 9 against the live domain; hosted backup drill | **Pending — nothing is deployed yet.** No production URL, dashboard or log stream exists to evidence. |
 
 ## Backup and restore drill
