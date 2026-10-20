@@ -104,6 +104,15 @@ export const MESSAGE_LIMIT = { max: 30, windowSeconds: 60 } as const;
 export const ROOM_CREATE_LIMIT = { max: 5, windowSeconds: 60 } as const;
 
 /**
+ * Meeting-token minting (`POST /api/rooms/[id]/meeting/token`). A token is a
+ * short-lived join credential, so the window exists to bound scripted
+ * minting (mirroring `DOWNLOAD_LIMIT`'s reasoning) while sitting well above
+ * an honest reconnect loop: 12/60s per room, per user leaves every other
+ * room's allowance untouched.
+ */
+export const MEETING_TOKEN_LIMIT = { max: 12, windowSeconds: 60 } as const;
+
+/**
  * Notification preference saves (`PATCH /api/profile/notification-prefs`).
  * A merged row update, mirroring PROFILE_LIMIT: 30/60s bounds a client
  * retry loop while sitting far above any human's toggling pace.
@@ -255,4 +264,12 @@ export function notificationPrefsKey(userId: string): string {
 
 export function notificationPrefsSpec(userId: string): RateLimitSpec {
   return { key: notificationPrefsKey(userId), ...NOTIFICATION_PREFS_LIMIT };
+}
+
+export function meetingTokenKey(roomId: string, userId: string): string {
+  return `meeting_token:${roomId}:${userId}`;
+}
+
+export function meetingTokenSpec(roomId: string, userId: string): RateLimitSpec {
+  return { key: meetingTokenKey(roomId, userId), ...MEETING_TOKEN_LIMIT };
 }

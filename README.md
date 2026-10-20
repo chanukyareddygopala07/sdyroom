@@ -410,14 +410,14 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
 
 ##  Testing
 
-Current suite: **1669 unit** (149 files), **433 integration** (24 files), **85 e2e**
-(21 specs).
+Current suite: **1713 unit** (154 files), **440 integration** (25 files), **87 e2e**
+(22 specs).
 
 - `npm test` (alias `npm run test:unit`) runs `vitest run` over `tests/unit/**` in the
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**` — 430 tests covering auth at the API boundary, onboarding
+  over `tests/integration/**` — 440 tests covering auth at the API boundary, onboarding
   and response privacy, RLS/grant behaviour per role, `create_room` atomicity
   (including the revoked-grant rollback), joining and capacity races, the shared focus
   timer state machine, personal-goal privacy, append-only room chat, the whole
@@ -437,7 +437,10 @@ Current suite: **1669 unit** (149 files), **433 integration** (24 files), **85 e
   persistence with read-back, a hostile body refused with the row
   byte-identical, the database floor on protected fields, roster reflection
   for a room-mate, preferences honored by the real invite producer, and the
-  `profile:{userId}` window) —
+  `profile:{userId}` window) — and meeting tokens end to end (the
+  membership-gated mint with its room-scoped JWT claims, the muted member's
+  microphone-less grant until the mute lifts, the indistinguishable `404`s,
+  the honest `503` while unconfigured, and the per-room `429` burst) —
   every suite shares a single control test that widens a grant and rolls it back.
   It needs
   the local stack (`npx supabase start && npx supabase db reset`) and never uses a
@@ -536,6 +539,23 @@ npm ci
    silently falls back to mock** — a broken key fails loudly as
    `502 ai_provider_failed`.
 
+   Live meetings are the same shape of optional, server-side-only feature —
+   read in one place, `lib/meeting/config.ts`, and never `NEXT_PUBLIC_*`:
+
+   | Variable | Notes |
+   | --- | --- |
+   | `LIVEKIT_URL` | The LiveKit server endpoint, `ws://` or `wss://` (a typo counts as unconfigured, logged by variable name only) |
+   | `LIVEKIT_API_KEY` | Token-signing issuer |
+   | `LIVEKIT_API_SECRET` | Token-signing secret. Server-only; never logged, never in a payload, never exposed to the browser |
+
+   All three are required together: with none of them the room workspace
+   simply disables the Meeting view with an explanation, and the token
+   endpoint answers an honest `503 meeting_unavailable`. Local development
+   can run [LiveKit's local server](https://docs.livekit.io/home/self-host/local-deployment)
+   (`docker run ... livekit/livekit-server --dev`, then
+   `LIVEKIT_URL=ws://localhost:7880` with the dev keys), or point at a
+   LiveKit Cloud project.
+
 2. Start the local stack and apply every migration:
 
    ```bash
@@ -618,10 +638,11 @@ unique study alias once, then discover public rooms and create your own.
 | `POST /api/rooms` | signed in, alias chosen | `401` / `400 validation` / `403 onboarding_required` / `201` |
 | `POST /api/rooms/[id]/join` | signed in | `201 joined` / `200 already_member`; `404 not_found` for a missing or private room, `409 room_closed` / `room_full`, `400` for a non-UUID id or any field in the body |
 | `POST /api/rooms/[id]/leave` | signed in | `200 left`; `404 not_found`, `409 owner_cannot_leave` / `not_a_member`, `400` as above |
-| `/rooms/[id]` | signed in, member | The study workspace: member roster with the per-member action menu (report / block / mute / remove / appoint), shared focus timer, recent sessions, the caller's own goals, room chat and the files shared into the room; owners of private rooms also get the invite panel, and owners/moderators get the moderation inbox |
+| `/rooms/[id]` | signed in, member | The study workspace: member roster with the per-member action menu (report / block / mute / remove / appoint), shared focus timer, recent sessions, the caller's own goals, room chat and the files shared into the room — plus a **Meeting** view (when LiveKit is configured) that joins a real audio/video call with screen sharing over the same room; owners of private rooms also get the invite panel, and owners/moderators get the moderation inbox |
 | `GET /api/rooms/[id]/workspace` | signed in, member | `{ room, session, viewer_role, server_now_ms, member_count, history }`; `404 not_found` for a non-member *and* a missing room (indistinguishable) |
 | `POST /api/rooms/[id]/session/start` | room owner | `201 started` / `200 already_active` (one active session per room, races included); `403 not_owner`, `404 not_found`, `400 validation` for a duration outside 60–7200 s |
 | `POST /api/rooms/[id]/session/pause` / `resume` / `end` | room owner | `200 paused` / `resumed` / `completed`; `409 no_active_session` / `invalid_state`, `403 not_owner`, `400 invalid_request` for a body carrying fields |
+| `POST /api/rooms/[id]/meeting/token` | signed in, member | Mints a short-lived LiveKit join token (`200`, 10-minute TTL, microphone dropped from the grant while room-muted); `404 not_found` for a non-member, `429` at 12 mints per minute per (room, member), `503 meeting_unavailable` with no provider configured, `500 meeting_token_failed` |
 | `GET /api/rooms/[id]/goals` | signed in, member | The caller's own goals in that room — never another member's; `404 not_found` for a non-member |
 | `POST /api/rooms/[id]/goals` | signed in, member | `201 { goal }`; `409 duplicate_goal` while an active goal with the same title exists |
 | `PATCH` / `DELETE /api/goals/[goalId]` | goal owner | `200 { goal }` / `200 { deleted: true }`; `404 not_found` for anyone else's goal, `400 invalid_request` for an empty `PATCH` |

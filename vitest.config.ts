@@ -38,13 +38,14 @@ export default defineConfig({
         "**/mocks/**",
         "**/test-utils.ts",
       ],
-      // PR 21 floors: measured baseline on 2026-10-18 was 75.5% statements /
-      // 65.95% branches; floor = baseline − 1pp, rounded down, so coverage
-      // cannot regress silently. Ratchet upward in later PRs — never lower
-      // these numbers without a written reason in the PR description.
+      // Live-meetings floors: measured baseline on 2026-10-21 was 76.04%
+      // statements / 66.66% branches; floor = baseline − 1pp, rounded down,
+      // so coverage cannot regress silently (the prior PR 21 baseline was
+      // 75.5 / 65.95 → floors 74 / 64). Ratchet upward in later PRs — never
+      // lower these numbers without a written reason in the PR description.
       thresholds: {
-        statements: 74,
-        branches: 64,
+        statements: 75,
+        branches: 65,
       },
     },
   },
