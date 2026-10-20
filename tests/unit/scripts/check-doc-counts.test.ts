@@ -80,8 +80,8 @@ describe("parseSecurityCoverage", () => {
   it("reads the real docs/SECURITY.md coverage numbers", () => {
     const entries = parseSecurityCoverage(readFileSync(path.resolve("docs/SECURITY.md"), "utf8"));
     expect(entries.length).toBeGreaterThan(20);
-    expect(entries.filter((e) => e.suite === "e2e").length).toBe(11);
-    expect(entries.filter((e) => e.suite === "integration").length).toBe(11);
+    expect(entries.filter((e) => e.suite === "e2e").length).toBe(12);
+    expect(entries.filter((e) => e.suite === "integration").length).toBe(12);
   });
 });
 

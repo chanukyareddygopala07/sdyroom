@@ -135,6 +135,53 @@ chat, files, timers and goals; only `join_room` is refused).
 
 ---
 
+## Live meetings
+
+| Method | Path | Summary |
+| --- | --- | --- |
+| `POST` | `/api/rooms/[id]/meeting/token` | Mint a short-lived LiveKit join token for this member and this room |
+
+The route takes an empty JSON body on purpose: nothing in the request is
+trusted. Identity comes from the session claims (the token's opaque
+participant identity), the room id is validated as a UUID, and membership is
+proven with `requireRoomMembership` — a non-member, a removed member and a
+missing room all answer the same `404 not_found`. The display name is the
+caller's own profile alias, read through RLS.
+
+An active room mute maps into the token grants: the microphone is dropped
+from `canPublishSources`, so a muted student joins, watches, shares their
+screen and keeps using chat, but cannot publish audio until the mute lifts
+and they rejoin. Grants never include room-admin, room-create, room-list,
+recording, ingress or own-metadata-update powers. Signing uses
+`LIVEKIT_API_SECRET` (server-only, documented in `.env.example`); the
+response carries the signed token and never the secret, and nothing in the
+token or the logs ever contains the study room's title or any PII beyond the
+caller's chosen alias — the LiveKit room name is `sdyroom-<room uuid>`.
+
+Rate limit: `meeting_token:{roomId}:{userId}` — 12 mints per 60 s per
+(room, member).
+
+| Status | Body |
+| --- | --- |
+| 200 | `{ "token": "…", "url": "wss://…", "room": "sdyroom-<uuid>", "identity": "<user id>", "expires_in": 600, "can_publish_mic": true }` |
+| 400 | `validation` · `invalid_json` · `invalid_request` (a body that carries fields) |
+| 401 | `unauthenticated` |
+| 404 | `not_found` — missing room, or you are no longer a member |
+| 429 | `rate_limited` — 12 mints per 60 s per (room, member), `Retry-After: 60` |
+| 503 | `meeting_unavailable` — no provider configured on this server; checked before the rate limit, so an unconfigured deployment spends no slot |
+| 500 | `meeting_token_failed` — signing or the alias lookup failed; no detail leaks |
+
+The `url` is only ever learned from this response: no `NEXT_PUBLIC_*` LiveKit
+variable exists, so the browser bundle carries no provider endpoint of its
+own. Ten minutes (`expires_in: 600`) covers a join plus immediate retries;
+an established LiveKit session stays alive across reconnects, and a dropped
+token stays useless for long. The room workspace only offers the meeting
+view when the server reports a provider configured (`isMeetingConfigured`),
+so the `503` exists for a configuration change between page load and the
+request — the honest answer either way.
+
+---
+
 ## Study resources (PR 05)
 
 A *resource* is one uploaded study file: a PDF, a PNG/JPEG scan of handwritten

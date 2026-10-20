@@ -98,6 +98,9 @@ drift between the codebase's `process.env` reads and this file.
 | `AI_BASE_URL` | no | Override for proxies/self-hosted providers. |
 | `AI_MAX_INGEST_BYTES` | no | Defaults in code (20 MiB, clamped to the upload ceiling); set to cap ingest size. |
 | `AI_EMBED_MODEL` / `AI_CHAT_MODEL` | no | Dynamic — read via `process.env[name]`; defaults `text-embedding-3-small` / `gpt-4o-mini`. |
+| `LIVEKIT_URL` | no (live meetings off) | LiveKit server endpoint, `ws://` or `wss://`. Server-side only (never `NEXT_PUBLIC_*`); a partial or non-websocket value counts as unconfigured, logged by variable name only. Without all three keys the Meeting view is disabled with an explanation and `POST /api/rooms/[id]/meeting/token` answers `503 meeting_unavailable`. |
+| `LIVEKIT_API_KEY` | no (live meetings off) | Token-signing issuer. Server-side only. |
+| `LIVEKIT_API_SECRET` | no (live meetings off) | Token-signing secret. Server-side only; never logged, never serialised, never sent to the browser. |
 | `VERCEL_URL` | platform | Set by Vercel automatically; used for absolute URL construction. |
 
 Secrets belong in the platform's secret store, never in `.env` files committed

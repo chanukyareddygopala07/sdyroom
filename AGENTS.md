@@ -77,7 +77,7 @@ Local stack: `npx supabase start`, `npx supabase db reset`, `.env.local` per
 
 `npm run test:coverage` measures `lib/**` + `app/api/**` (server surface;
 UI is asserted by behavioural tests but excluded from the floor). Floors:
-**statements 74%, branches 64%** (baseline 2026-10-18 minus 1pp). Ratchet
+**statements 75%, branches 65%** (baseline 2026-10-21 minus 1pp). Ratchet
 them upward when coverage improves; lowering a floor requires a written
 reason in the PR description. Integration runs are never folded into this
 number.

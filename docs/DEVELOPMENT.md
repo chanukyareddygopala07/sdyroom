@@ -22,6 +22,52 @@ section of `docs/local-supabase.md`. `.env.example` is the authoritative
 key list; `npm run check:env` fails when the code reads a key the example
 does not document.
 
+## Live meetings (LiveKit)
+
+The room workspace has a second view, **Meeting**: a real audio/video call
+with screen sharing, powered by [LiveKit](https://livekit.io) and joined
+through `POST /api/rooms/[id]/meeting/token`. It is an optional,
+server-side-only feature with the same discipline as the AI provider:
+
+- Three keys, read in exactly one place — `lib/meeting/config.ts`:
+  `LIVEKIT_URL` (`ws://`/`wss://`), `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`.
+  All three are required together; none of them is ever `NEXT_PUBLIC_*`, so
+  the browser bundle carries no provider endpoint and never sees the
+  secret. The client learns the URL only from the token response.
+- **No provider configured → the feature is honestly off**: the Meeting
+  toggle is disabled with an explanation, the join card cannot be reached,
+  and the token route answers `503 meeting_unavailable` (checked before the
+  rate limit, so nothing is spent). `npm run check:env` covers the keys
+  through `.env.example`.
+- Local development needs a LiveKit server to actually connect —
+  [LiveKit's local deployment](https://docs.livekit.io/home/self-host/local-deployment)
+  is one container:
+
+  ```bash
+  docker run --rm -p 7880:7880 -p 7881:7881 \
+    -e LIVEKIT_KEYS=APIkeyEXAMPLE:secretEXAMPLEvalue1234567890 \
+    livekit/livekit-server --dev
+  ```
+
+  then set `LIVEKIT_URL=ws://localhost:7880`, `LIVEKIT_API_KEY` and
+  `LIVEKIT_API_SECRET` in `.env.local` to match the key above. (A LiveKit
+  Cloud project works too — put its URL and keys in the same three
+  variables.) Without any of them everything else about the workspace still
+  works, and `tests/e2e/meeting.spec.ts` runs only its unconfigured-path
+  test.
+
+Code map: `lib/meeting/config.ts` (env + room-name derivation) ·
+`lib/meeting/token.ts` (JWT grants: join-only, microphone dropped for a
+muted member) · `app/api/rooms/[id]/meeting/token/route.ts` (auth,
+membership, rate limit, envelope) · `components/room-workspace.tsx`
+(study/meeting toggle, chat mounted in both views) ·
+`components/meeting/*` (join-card state machine, `LiveKitRoom` wiring,
+tiles, controls, device pickers). Authorization never moves client-side:
+every join re-mints the token, and the token route re-proves membership on
+that request. Moderation (mute / remove / appoint) keeps using its existing
+server-authorized routes — see `docs/API_CONTRACTS.md` (rate limit
+`meeting_token:{roomId}:{userId}`, 12 per 60 s per room and member).
+
 ## OAuth providers (Google & GitHub)
 
 The sign-in and sign-up screens offer real Supabase OAuth for Google and
