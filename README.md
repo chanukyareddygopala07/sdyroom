@@ -9,8 +9,9 @@
 </p>
 
 <p align="center">
-  Capacity-limited study rooms for exam prep — shared focus timers, goals, realtime
-  chat, private file sharing and member safety, built with Next.js and Supabase.
+  A collaborative study platform for exam prep — capacity-limited study rooms with
+  shared focus timers, goals, realtime chat and private files; end-to-end encrypted
+  communities; optional live meetings; AI study tools — built with Next.js and Supabase.
 </p>
 
 <p align="center">
@@ -29,6 +30,7 @@
   <a href="#security"><strong>Security</strong></a> ·
   <a href="#testing"><strong>Testing</strong></a> ·
   <a href="#getting-started"><strong>Getting Started</strong></a> ·
+  <a href="#deployment"><strong>Deployment</strong></a> ·
   <a href="#documentation"><strong>Documentation</strong></a> ·
   <a href="#contributing"><strong>Contributing</strong></a>
 </p>
@@ -37,9 +39,13 @@
 
 SdyRoom is a study-together platform for students preparing for competitive and
 university examinations — JEE, NEET, GATE, semester exams and more. Sign up with a
-password, pick a unique **study alias** once (your email is never shown to anyone),
-discover public study rooms or create your own capacity-limited room, and study
-"together" with a shared focus timer, personal goals, realtime chat and private file
+password or a Google/GitHub account, pick a unique **study alias** once (your email
+is never shown to anyone), discover public study rooms or create your own
+capacity-limited room, and study "together" with a shared focus timer, personal
+goals, realtime chat and private file sharing. Students can also form
+**communities** — groups whose messages, stickers, files and GIFs are
+end-to-end encrypted in the browser so the server only ever stores ciphertext —
+and meet face-to-face in optional **LiveKit audio/video meetings** with screen
 sharing.
 
 **The problem it solves:** students rarely lack content — they lack consistent
@@ -57,8 +63,10 @@ Level Security, Storage, Realtime).
 
 ###  Implemented
 
--  Password authentication with cookie sessions (`@supabase/ssr`) and a one-time
-  study-alias onboarding
+-  Password authentication with cookie sessions (`@supabase/ssr`), Google/GitHub
+  sign-in through Supabase OAuth (owner-configured — a provider that is not
+  enabled shows an honest "not available" state), password reset by email, and
+  a one-time study-alias onboarding
 -  Public room discovery with `?q=` search over name, subject and exam track
 -  Capacity-limited rooms (1–100 seats), public/private and open/closed, with
   owner-only settings and type-the-name deletion
@@ -91,38 +99,66 @@ Level Security, Storage, Realtime).
   preview page that 404s a private room exactly like a missing one (PR 17)
 -  Member safety: reports, one-way blocks, mutes, member removal, owner-appointed
   room moderators, and a moderation inbox that never shows the reporter
+-  In-app notifications: an inbox with an unread badge in the header, produced
+  server-side by invitations and moderation actions (the `notifications` table
+  grants no `INSERT` to any application role — the two SECURITY DEFINER
+  producers write it), with per-type delivery preferences (PR 11)
+-  Communities: public or private groups with categories, join rules
+  (open / request-to-join), owner / moderator / member roles, approvals,
+  kicks, bans, staff moderation reports and per-community channels — plus
+  **end-to-end encrypted channels**: MLS via `ts-mls` (ciphersuite
+  `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`) encrypts message bodies,
+  stickers and reactions on the device, files and GIFs are AES-256-GCM
+  encrypted before upload, each device publishes key packages, and welcomes
+  carry the RFC 9420 ratchet tree. **`ts-mls` has not undergone an
+  independent security audit** — see [Security](#security); membership,
+  timings, sizes and device ids remain visible to the server by design
+-  Live meetings: a **Meeting** view in the room workspace — audio/video calls
+  with screen sharing through LiveKit, joined with a short-lived token minted
+  per request. Externally configured: without the three `LIVEKIT_*` keys the
+  toggle is disabled with an explanation and the token endpoint answers an
+  honest `503 meeting_unavailable` (PR #36)
 -  Profile & settings: a student edits their study alias (reflected in the
   header and room rosters), exam targets and preferred language from shared
   vocabularies, notification preferences, and reads their account email (PR 20)
 - Light and dark themes
 
-###  In Review
-
--  AI study planner (PR 15, GitHub PR #21) — personal day-by-day plans
-  with deterministic adjustments; see the [Roadmap](#roadmap) for status
--  Study analytics (PR 16, GitHub PR #22) — personal dashboard with
-  streaks, accuracy and CSV export, plus room aggregates for owners and
-  moderators; see the [Roadmap](#roadmap) for status
--  Advanced room discovery (PR 17, GitHub PR #23) — URL-driven search,
-  filters and sorts over public rooms only, cursor paging, and a
-  public-safe preview page; see the [Roadmap](#roadmap) for status
--  Profile & settings (PR 20, GitHub PR #25) — alias editing that reaches
-  the header and rosters, exam targets/language from shared vocabularies,
-  the notification preferences form and account details on one page; see
-  the [Roadmap](#roadmap) for status
-
 <a name="planned"></a>
 
-###  Planned
+###  What's next
 
-The ordered plan lives in [`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) and
-[`docs/milestones.md`](docs/milestones.md); highlights:
+Every specification PR in the roadmap has shipped — GitHub PRs #1–#38 are
+merged except #16, a leftover docs-status branch, which was closed without
+merging.
+What remains is operational rather than code: a hosting and deployment
+decision, branch protection on `main`, and the launch drills recorded in
+[`docs/RELEASE.md`](docs/RELEASE.md). Product planning continues in
+[`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) and
+[`docs/milestones.md`](docs/milestones.md).
 
-- Notifications (PR 11)
-- Production hardening — security headers/CSP, monitoring, backups, load testing
-  (PR 18)
-- Mobile/responsive shell and accessibility baseline (PR 19), profile and settings
-  (PR 20), coverage gates (PR 21)
+<a name="different"></a>
+
+##  What makes SdyRoom different
+
+- **Privacy-first identity.** Students collaborate behind a one-time alias —
+  no email, phone number or social profile is ever shown to another student,
+  and no endpoint accepts an identity as input.
+- **The database is the authority.** Row Level Security, column grants and
+  `SECURITY DEFINER` RPCs enforce every rule server-side; the API re-checks
+  rather than trusts. No service-role key exists anywhere in the application
+  code or CI.
+- **Encrypted communities, honestly scoped.** Community chat and files are
+  end-to-end encrypted in the browser while the server keeps only ciphertext —
+  with the explicit caveat that `ts-mls` is not independently audited and
+  metadata stays server-visible.
+- **Honest states instead of fake success.** Unconfigured integrations disable
+  themselves with an explanation (AI demo mode, meetings `503`, hidden GIF
+  tab); failures answer through one error envelope with stable codes.
+- **Addressed, not linkable.** Invitations go to an alias — there is no URL to
+  forward — and a non-member sees the same `404` as a missing room.
+- **Tested like infrastructure.** 2,488 tests across unit, integration and e2e
+  suites, coverage floors enforced in CI, RLS/grant freezes in the integration
+  suite, and documentation gates that fail when documented counts drift.
 
 <a name="demo"></a>
 
@@ -162,10 +198,12 @@ flowchart TB
 
     subgraph SUP["Supabase — local stack in development"]
         A["Auth<br/>cookie sessions via @supabase/ssr"]
-        D[("Postgres<br/>24 tables · RLS · grants · RPCs · rate limits")]
-        S[("Storage<br/>private study-resources bucket")]
-        T["Realtime<br/>chat · presence · focus sessions"]
+        D[("Postgres<br/>32 tables · RLS · grants · RPCs · rate limits")]
+        S[("Storage<br/>private buckets: study-resources<br/>+ community-attachments")]
+        T["Realtime<br/>chat · presence · focus<br/>communities · notifications"]
     end
+
+    X["Optional providers — server-side keys only<br/>LiveKit (meetings) · AI (OpenAI-shaped, mock when unkeyed)<br/>GIF (Tenor/Giphy proxy); each honest when unconfigured"]
 
     U --> P
     P --> R
@@ -175,6 +213,7 @@ flowchart TB
     L --> A
     L --> D
     L --> S
+    H --> X
     D --> T
     T --> U
 ```
@@ -269,6 +308,30 @@ flowchart LR
   arrival alike); mutes are re-checked by the insert policy, so a direct
   PostgREST write cannot bypass them. There is no global admin role: every
   right is scoped to one room.
+- **Communities (end-to-end encrypted)**: `lib/communities/` gates discovery,
+  visibility and membership server-side with the same `404` parity as rooms —
+  `community_members` carries a `SELECT`-alone grant, so create / join /
+  leave / role changes / kicks travel through SECURITY DEFINER RPCs
+  (`0025`) and self-promotion is structurally unreachable. Message bodies are
+  a different story: they are MLS-encrypted on the device before `POST
+  …/channels/[channelId]/messages` ever runs, and the handler validates
+  envelope shape, size, rate-limit window and membership before inserting
+  **ciphertext** (a repeated `clientMsgId` is idempotent). Files and GIFs are
+  AES-256-GCM encrypted in the browser, stored in the private
+  `community-attachments` bucket, and served as 120-second signed URLs only
+  after a server re-check. Devices publish key packages for peers' Add
+  commits, welcomes address the ratchet tree to one recipient, and a leaving
+  member's local MLS state is wiped — the Remove commit is produced by a
+  *surviving* member's next sync, because `ts-mls` forbids committing one's
+  own removal. Reports are the deliberate opt-in exception: a voluntary
+  decrypted excerpt of at most 2 000 characters.
+- **Optional providers, honestly off**: everything outside Supabase is
+  server-keyed and fails closed — `lib/ai/config.ts` (mock pipeline with a
+  demo banner when unkeyed, never a silent fallback), `lib/meeting/config.ts`
+  (LiveKit: disabled Meeting toggle + `503 meeting_unavailable`) and
+  `lib/communities/gif.ts` (Tenor/Giphy behind `/api/communities/gif/*`
+  with a host allow-list and 5 MiB cap; the tab hides when unconfigured).
+  Keys are read server-side only and never appear in `NEXT_PUBLIC_*`.
 - **Errors**: one envelope for every API failure, `{ error: { code, message, issues?
   } }`, built by `lib/api/responses.ts`.
 
@@ -277,7 +340,7 @@ repository keeps the starter's root-level `app/`, `lib/` and `components/`, so t
 modules live at `lib/validation/`, `lib/rooms/`, `lib/profiles/` and `lib/api/`
 instead of `src/lib/...`. Route and test paths are otherwise unchanged.
 
-For the full directory map, data model (24 tables) and where decisions live, read
+For the full directory map, data model (32 tables) and where decisions live, read
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 <a name="security"></a>
@@ -287,7 +350,7 @@ For the full directory map, data model (24 tables) and where decisions live, rea
 - **Server-side auth gates**: pages are session-gated (middleware redirect for
   browsers, JSON `401` for APIs); every room endpoint re-checks membership, and a
   non-member gets the same `404` as a missing room (`lib/rooms/access.ts`).
-- **The database is the authority**: all 24 tables are RLS-enabled and granted
+- **The database is the authority**: all 32 tables are RLS-enabled and granted
   column by column (`auto_expose_new_tables = false`); privileged writes go through
   `SECURITY DEFINER` RPCs; there is no `USING (true)` policy anywhere, and identity
   is never accepted as a request parameter.
@@ -299,6 +362,31 @@ For the full directory map, data model (24 tables) and where decisions live, rea
 - **Chat and moderation privacy**: chat is append-only; blocks filter at RLS
   delivery; mutes are re-checked by the insert policy; `reporter_id` has no
   `SELECT` grant, so no payload can leak who filed a report.
+- **End-to-end encrypted communities — what is actually protected**: message
+  bodies, stickers, reactions and file/GIF payloads are encrypted on the
+  device before they leave it. The protocol is MLS through `ts-mls@1.6.4`,
+  ciphersuite `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`; attachments and
+  GIFs use AES-256-GCM envelopes whose keys travel inside the E2EE payload.
+  Postgres stores ciphertext only, and Realtime delivers ciphertext rows
+  filtered by the `messages_select_member` policy at delivery. Attachments
+  download through 120-second signed URLs re-checked server-side per request.
+  **`ts-mls` has not undergone an independent security audit — this project
+  makes no independently-verified encryption claim.**
+- **Communities — what the server still sees, and the limits**: all metadata
+  stays plaintext by design — membership and roles, channel structure,
+  message timing and sizes, sender device ids — and the GIF search query
+  leaves the server toward the provider. Key lifecycle: devices publish
+  public key packages, welcomes are addressed to one recipient, and a leaver's
+  local MLS state is wiped (the Remove commit comes from a *surviving*
+  member's next sync, since MLS forbids self-removal). A member removed while
+  offline still holds messages from epochs they legitimately had; there is no
+  escrow, so losing every device makes history unrecoverable; and each
+  device caches the student's *own* sent messages as plaintext (MLS senders
+  cannot re-decrypt their own envelopes), so a compromised device exposes that
+  student's own community history. Community reports carry a voluntary,
+  opt-in decrypted excerpt of at most 2 000 characters — the one deliberate
+  plaintext escape hatch. Full threat model and test evidence:
+  [`docs/SECURITY.md`](docs/SECURITY.md) §Communities.
 - **No secrets at runtime**: no service-role key exists in application code, CI runs
   with `permissions: contents: read` and zero repository secrets, and `.env.local`
   is gitignored.
@@ -318,6 +406,8 @@ Read the threat model, security coverage and known limitations in
 | Framework | [Next.js](https://nextjs.org) 16.3.8 — App Router, `cacheComponents`, Proxy |
 | Language | [TypeScript](https://www.typescriptlang.org) 5.9.3 (strict) |
 | Backend | [Supabase](https://supabase.com) — Auth, Postgres + RLS, Storage, Realtime; pinned CLI 2.119.0 for the local stack |
+| Live meetings | [LiveKit](https://livekit.io) — `livekit-client` 2.23.0, `livekit-server-sdk` 2.19.1, `@livekit/components-react` 2.9.24 (bring your own LiveKit server or cloud keys) |
+| Community encryption | [ts-mls](https://www.npmjs.com/package/ts-mls) 1.6.4 (MLS) plus WebCrypto AES-256-GCM for attachments — **not independently audited** |
 | Validation | [Zod](https://zod.dev) 4.6.5, mirroring the database CHECK constraints |
 | Styling | [Tailwind CSS](https://tailwindcss.com) 4.3.3 + [shadcn/ui](https://ui.shadcn.com/) on Radix UI |
 | Tests | [Vitest](https://vitest.dev) 5.0.3 (unit + integration), [Playwright](https://playwright.dev) 1.63 (e2e), Testing Library |
@@ -344,7 +434,9 @@ Read the threat model, security coverage and known limitations in
 
 ### Pinned dependency versions
 
-All dependencies are pinned to exact versions (no `^`, `~` or `latest`) in `package.json`.
+All dependencies are pinned to exact versions (no `^`, `~` or `latest`) in
+`package.json` — with two deliberate exceptions: `ts-mls` (`^1.6.4`, runtime)
+and `fake-indexeddb` (`^6.2.2`, dev).
 
 | Package | Version |
 | --- | --- |
@@ -359,7 +451,7 @@ All dependencies are pinned to exact versions (no `^`, `~` or `latest`) in `pack
 | @tailwindcss/postcss | 4.3.3 |
 | eslint-config-next | 16.3.8 |
 | vitest | 5.0.3 |
-| vite | 8.3.2 |
+| vite | 8.3.2 on this branch (`main` has 8.3.4 after the PR #37 bump) |
 | jsdom | 30.1.2 |
 
 **Next.js 16.3.8 is an intentional, security-driven deviation from the originally
@@ -390,8 +482,8 @@ The migration replaced the v3 trio (`tailwindcss` + `autoprefixer` + `tailwind.c
 
 `npm audit --omit=dev` (production dependencies): **0 vulnerabilities**.
 
-`npm audit` (all dependencies): **5 high**, all in the dev toolchain and all one chain
-rooted in a single advisory:
+`npm audit` (all dependencies): **6 high** on this branch — five in one
+dev-toolchain chain rooted in a single advisory:
 
 | Advisory | Package | Range |
 | --- | --- | --- |
@@ -403,8 +495,15 @@ Propagation: `braces` ← `micromatch` ← `fast-glob` ← `@next/eslint-plugin-
 `braces@3.0.3` is the newest release on npm, so **no fixed version exists yet**; npm's
 only suggested resolution is a downgrade of `eslint-config-next` to 14.2.35, which is
 rejected. Nothing is suppressed and `--force` / `--legacy-peer-deps` are not used.
-Re-check `npm audit` on every dependency update: the count fell from 7 to 5 with the
-Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `braces` path).
+
+A second dev-toolchain chain exists around vite: `vite 8.3.0–8.3.2` →
+`launch-editor` (three Windows-specific advisories in editor-command
+handling) — the sixth high on this branch. `main` bumped vite to 8.3.4
+(PR #37), outside that vulnerable range, so `npm audit` shows **5 high**
+there; npm's suggested fix (8.3.5) sits outside the exact pin and is not
+taken blindly. Re-check `npm audit` on every dependency update: the braces
+count fell from 7 to 5 with the Tailwind CSS 4 migration (removing the
+`tailwindcss@3` → `chokidar` → `braces` path).
 
 <a name="testing"></a>
 
@@ -417,7 +516,7 @@ Current suite: **1935 unit** (171 files), **465 integration** (26 files), **88 e
   Node environment. It never contacts Supabase and passes without a local stack running.
   Individual UI test files opt into jsdom with a `@vitest-environment jsdom` docblock.
 - `npm run test:integration` runs `vitest run --config vitest.integration.config.ts`
-  over `tests/integration/**` — 440 tests covering auth at the API boundary, onboarding
+  over `tests/integration/**` — 465 tests covering auth at the API boundary, onboarding
   and response privacy, RLS/grant behaviour per role, `create_room` atomicity
   (including the revoked-grant rollback), joining and capacity races, the shared focus
   timer state machine, personal-goal privacy, append-only room chat, the whole
@@ -471,7 +570,10 @@ Current suite: **1935 unit** (171 files), **465 integration** (26 files), **88 e
   announced and reflected in the header and the room roster, exam targets and
   language persisted across a read-back, a notification preference surviving a
   reload, invalid aliases surfacing inline `role="alert"` errors, and sign-out
-  from the account section guarding the app afterwards), and the encrypted
+  from the account section guarding the app afterwards), accessibility (axe
+  scans over the public, auth, discovery, settings and workspace surfaces),
+  live meetings (the honest unavailable state with no LiveKit keys — the
+  live-join spec skips without a server), and the encrypted
   community journey in two real browsers (owner creates a community and
   bootstraps its channel group, a second student joins and is honestly locked
   until the owner's next sync Adds their device and addresses the welcome,
@@ -500,8 +602,9 @@ open a pull request.
 
 | Status | PRs |
 | --- | --- |
-|  Merged | #1–#25 — chat, realtime, focus sessions & goals, room discovery, resources, presence, invitations & roster, room management, member safety, resource security, notifications, the AI document/ask/quiz/planner stack, study analytics, room discovery upgrade, production hardening, mobile & accessibility, profile/settings |
-|  In progress | #26 — the quality & coverage baseline (CI floors, doc gates, contributor docs) |
+|  Merged | #1–#15 and #17–#38 — the whole product through end-to-end encrypted communities (#38): rooms, focus sessions & goals, chat, presence, invitations & roster, room management, moderation, resource hardening, notifications, the AI stack (documents → ask → quizzes → planner → analytics), discovery, production hardening, responsive shell & accessibility, profile & settings, quality/coverage gates, release & staging runbooks, chat-history reconciliation, retention cron, brand/auth/landing redesigns, LiveKit meetings, and communities |
+|  Closed | #16 — a leftover docs-status branch, closed without merging |
+|  Open | none — every spec PR and follow-up has landed |
 
 Details, order and acceptance criteria:
 [`docs/PR_ROADMAP.md`](docs/PR_ROADMAP.md) ·
@@ -568,6 +671,18 @@ npm ci
    `LIVEKIT_URL=ws://localhost:7880` with the dev keys), or point at a
    LiveKit Cloud project.
 
+   The community composer's GIF search is the same shape — two keys read
+   together in `lib/communities/gif.ts`, never `NEXT_PUBLIC_*`:
+
+   | Variable | Notes |
+   | --- | --- |
+   | `GIF_PROVIDER` | `tenor` or `giphy` |
+   | `GIF_API_KEY` | Provider credential — never logged, never sent to the browser; the browser only calls `/api/communities/gif/*` |
+
+   Both empty → the GIF tab hides and the proxies answer `503
+   gif_unavailable`. Local setup: a free Tenor or Giphy key; details in
+   [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) ("GIF search (communities)").
+
 2. Start the local stack and apply every migration:
 
    ```bash
@@ -603,10 +718,45 @@ npm ci
 
 The database foundation runs entirely locally through the pinned CLI
 (`npx supabase start`), with Postgres on port **54322** — never the Homebrew server on
-5432. See [docs/local-supabase.md](docs/local-supabase.md) for the schema, grants, RLS
-policies, the private `study-resources` bucket and its storage policies, the
-`create_room` RPC, how owner-membership atomicity is enforced, and the verification
-commands.
+5432 — and every migration (`0001`–`0025`, one append-only file per schema
+change) applies with `npx supabase db reset`. `supabase/seed.sql` is
+intentionally empty: no demo data ships. See
+[docs/local-supabase.md](docs/local-supabase.md) for the 32-table schema,
+grants, RLS policies, both private buckets (`study-resources`,
+`community-attachments`) with their storage policies, the SECURITY DEFINER
+RPCs (rooms, moderation, communities), how owner-membership atomicity is
+enforced, and the verification commands.
+
+<a name="deployment"></a>
+
+##  Deployment
+
+**Current status: no production deployment is recorded in this repository.**
+There is no hosting configuration checked in (no `vercel.json` or equivalent),
+CI runs with `permissions: contents: read` and zero secrets, and branch
+protection is not enabled on `main` — so treat SdyRoom as self-hosted until
+those decisions are made and recorded.
+
+When you deploy:
+
+- **Shape**: a Node.js 24 host (`.nvmrc`) running `npm run build` and
+  `npm start`, or the Next.js-native platform of your choice, pointed at a
+  hosted Supabase project. The only required variables are the two
+  browser-safe `NEXT_PUBLIC_SUPABASE_*` values; `AI_*`, `LIVEKIT_*` and
+  `GIF_*` are optional and each feature honestly disables itself without
+  them. No service-role key is needed by the application.
+- **Gates first**: the full checklist — lint, types, coverage floors, doc
+  gates, build, integration, e2e, `npm run smoke` against the built server —
+  plus the environment matrix and the launch checklist live in
+  [`docs/RELEASE.md`](docs/RELEASE.md).
+- **Staging**: a private staging shape (Vercel preview deployments plus a
+  dedicated Supabase project, env scoping and `pg_cron` verification) is
+  written up in [`docs/STAGING.md`](docs/STAGING.md).
+- **Database**: hosted Supabase applies the same append-only migrations;
+  verification commands and recovery gaps are documented in
+  [`docs/local-supabase.md`](docs/local-supabase.md) and
+  [`docs/RELEASE.md`](docs/RELEASE.md) (restore drills do not restore
+  storage objects — the two buckets are outside `pg_dump`).
 
 <a name="documentation"></a>
 
@@ -616,6 +766,7 @@ commands.
 | --- | --- |
 | [Project wiki](https://github.com/chanukyareddygopala07/sdyroom/wiki) | Product vision, positioning and feature overview |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the layers fit together, directory map, data model |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Day-to-day guide: suites, migrations, adding endpoints, LiveKit/GIF/OAuth setup |
 | [docs/API_CONTRACTS.md](docs/API_CONTRACTS.md) | What every endpoint accepts and returns |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, security coverage, known limitations |
 | [docs/local-supabase.md](docs/local-supabase.md) | Local database: schema, grants, policies, verification |
@@ -630,13 +781,14 @@ commands.
 
 ##  Application & API
 
-SdyRoom is a minimal working application on top of this starter: sign up, pick a
-unique study alias once, then discover public rooms and create your own.
+SdyRoom is a full application on top of this starter: sign up, pick a
+unique study alias once, then discover public rooms, run shared sessions, join
+or create communities, meet over video, and use the AI study tools.
 
 | Route | Access | What it does |
 | --- | --- | --- |
 | `/` | public | Landing page with sign-up and browse calls to action |
-| `/auth/*` | public | Password auth. Local Supabase has email auto-confirm on, so sign-up returns a session and routes to `/onboarding`; otherwise the success page is shown |
+| `/auth/*` | public | Password auth plus Google/GitHub OAuth (when the owner has enabled a provider) and password reset by email. Local Supabase has email auto-confirm on, so sign-up returns a session and routes to `/onboarding`; otherwise the success page is shown |
 | `/onboarding` | signed in | One-time study alias via `POST /api/profile` |
 | `/rooms` | signed in | Public room discovery with a `?q=` search over name, subject and exam track; rooms you belong to link straight into their workspace |
 | `/rooms/new` | signed in, alias chosen | Create a room via `POST /api/rooms` and enter its workspace |
@@ -699,10 +851,23 @@ unique study alias once, then discover public rooms and create your own.
 | `POST /api/ai/ingest/[resourceId]` · `sweep` · `GET /api/ai/usage` | member | Bounded ingestion steps, the maintenance sweep and per-user usage; `429` on both AI windows |
 | `/rooms/[id]/preview` | signed in | Public-safe room detail page; a private room is the same rendered `404` a missing id gives |
 | `GET /api/rooms/[id]/preview` | signed in | The preview payload with identical `404` parity |
+| `/communities` · `/communities/[id]` | signed in | Discovery (public browse, category/search filters, your communities + create dialog) and the community workspace: channel sidebar, encrypted message list with honest per-decrypt states, composer (text / sticker / GIF / file), members panel and settings |
+| `GET` / `POST /api/communities` | signed in | One page of **public** communities with `q` / `category` / `limit` (no cursor) / create through the `create_community` RPC — community + owner row + `general` channel; `409 slug_taken`, `429` at 5 creates per minute |
+| `GET` / `PATCH` / `DELETE /api/communities/[id]` | member / owner | Detail + the caller's membership / staff edit (documented clear-on-omit semantics; ownership cannot transfer) / owner delete — `204` for the owner, `403` for a member who is not, `404` for a non-member (indistinguishable from missing) |
+| `POST /api/communities/[id]/join` · `/leave` | signed in / member | Join an open community or file a request → `200 { status: "active" \| "requested" }` (banned → `403`); leave → `204`, with `409 owner_cannot_leave` — MLS state is wiped locally, the Remove commit comes from a surviving member |
+| `GET` / `POST /api/communities/[id]/channels` | member / staff | Channel list / create (server-booked position) — each channel is one MLS group |
+| `GET` / `POST /api/communities/[id]/channels/[channelId]/messages` | member | Ciphertext page on the `seq` cursor / one opaque envelope (`201`, idempotent on `client_msg_id`, 30 sends per minute; `404` parity for non-members) |
+| `POST …/channels/[channelId]/welcomes` · `GET /api/communities/[id]/welcomes` · `GET …/sync` | member | MLS lifecycle: one addressed welcome + ratchet-tree snapshot, the caller's pending welcomes, and the bounded sync read (active member ids + key packages) that drives Adds/Removes |
+| `GET /api/communities/[id]/members` · `PATCH`/`DELETE …/members/[userId]` | member / staff | Roster (staff can include requested rows) and approve / ban / role / kick — all membership writes are SECURITY DEFINER RPCs behind `community_member:*` rate limits |
+| `POST /api/communities/[id]/reports` | member | Voluntary report with an optional decrypted excerpt (≤2 000 chars) — reporter identity pinned server-side, never returned |
+| `POST /api/communities/[id]/attachments` · `GET …/attachments/[attachmentId]` | member | Register a client-encrypted upload (private `community-attachments` bucket, 10 MiB object ceiling) / mint a **120-second** signed URL after a membership re-check |
+| `POST /api/communities/devices` · `POST …/devices/fetch` | signed in | Publish this device's public key package (unique per device) / fetch other members' packages for Add commits |
+| `GET /api/communities/gif/search` · `POST …/gif/fetch` | signed in | Server-side GIF search and download proxies (provider key stays server-side, host allow-list, 5 MiB `image/gif` only); `503 gif_unavailable` when unconfigured |
 
 Endpoints that consume scarce resources — reports, blocks, mutes, invitations,
-messages, room creation, notification-preference writes, the AI routes and the file
-endpoints above — additionally answer `429 rate_limited`
+messages, room creation, notification-preference writes, the AI routes, the file
+endpoints above, and the community create / message / membership / attachment /
+GIF windows — additionally answer `429 rate_limited`
 with a `Retry-After` header once their fixed-window budget is spent;
 [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) holds the authoritative per-endpoint
 contracts.
@@ -758,4 +923,8 @@ plus the integration and e2e suites), and the pull-request checklist.
 
 Licensed under the [MIT License](LICENSE) — see the license file for details.
 
-Built from the Supabase Next.js starter kit.
+Built from the Supabase Next.js starter kit, with thanks to the projects it
+stands on: [Next.js](https://nextjs.org), [Supabase](https://supabase.com),
+[Tailwind CSS](https://tailwindcss.com) and shadcn/ui, the MLS implementation
+in [ts-mls](https://www.npmjs.com/package/ts-mls), and
+[LiveKit](https://livekit.io) for real-time media.

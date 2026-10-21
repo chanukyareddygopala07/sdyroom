@@ -18,8 +18,10 @@ npx supabase db reset
 npm run dev                  # http://localhost:3000
 ```
 
-The two environment variables the app reads are public and browser-safe
-(`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`). `.env.local`
+The app reads the 13 keys documented in `.env.example`; the two
+`NEXT_PUBLIC_` ones are public and browser-safe
+(`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`) and
+every other key is server-side only. `.env.local`
 is gitignored — never commit it, and never put a service-role or secret key in a
 `NEXT_PUBLIC_` variable, a doc, a log or a test.
 
@@ -48,7 +50,7 @@ CI (`.github/workflows/ci.yml`) must be green. Run the same gates locally:
 npm run lint            # ESLint (flat config)
 npx tsc --noEmit        # type check (what the CI "types" step runs; there is no typecheck script)
 npm test                # unit suite — no network, no stack needed
-npm run test:coverage   # unit suite + coverage floors (statements 74% / branches 64%)
+npm run test:coverage   # unit suite + coverage floors (statements 75% / branches 65%)
 npm run check:env       # process.env reads match .env.example
 npm run check:counts    # documented test counts match reality (pass -- --unit-json=… after a run for totals)
 npm run check:links     # relative markdown links resolve
