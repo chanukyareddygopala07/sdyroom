@@ -17,8 +17,10 @@ cp .env.example .env.local  # then fill the Supabase URL/key from `npx supabase 
 npm run dev                 # http://localhost:3000
 ```
 
-Sign-up needs email confirmation locally — see the "Email confirmation"
-section of `docs/local-supabase.md`. `.env.example` is the authoritative
+Sign-ups are auto-confirmed locally — see the "Email confirmation"
+section of `docs/local-supabase.md` (`enable_confirmations = false`, no
+click needed; Mailpit still catches emails from flows such as password
+recovery). `.env.example` is the authoritative
 key list; `npm run check:env` fails when the code reads a key the example
 does not document.
 
