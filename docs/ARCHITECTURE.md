@@ -21,6 +21,11 @@ Supabase (local stack, no service role anywhere)
   ├─ Realtime: focus/chat/communities postgres_changes,
   │            presence channels                              (delivery)
   └─ Storage: private buckets + per-object policies           (bytes)
+
+Optional externals — server-keyed, honest off-states           (boundaries)
+  ├─ AI provider   OpenAI-shaped HTTP; mock pipeline when unkeyed
+  ├─ LiveKit       media flows browser ↔ LiveKit; the app only mints join tokens
+  └─ GIF provider  Tenor/Giphy behind the community proxy (host allow-list)
 ```
 
 Two rules define the codebase:
@@ -51,6 +56,7 @@ and never sees plaintext chat (`docs/SECURITY.md` §Communities).
 | `lib/rooms/access.ts` | The shared membership/ownership gates (`requireRoomMembership`, `requireRoomOwner`) that give non-members the same `404` as a missing room. |
 | `lib/communities/` | The community feature module: `access.ts` (membership/staff/visibility gates with the same `404` parity), `queries.ts` (RPC-backed reads/writes with `CommunityError` codes), `sync.ts` (the MLS sync orchestrator: bootstrap, bounded Adds, Remove decisions), `payload.ts` (the strict envelope shape), `gif.ts` (server-side provider proxy). |
 | `lib/crypto/` | Device-side cryptography: `mls.ts` (the `ts-mls` wrapper — group state, commits, welcomes, epoch rules, local-state teardown), `attachment.ts` (AES-256-GCM envelope helpers), `storage.ts` (IndexedDB stores for MLS group state and the own-message plaintext cache). `ts-mls` is **not independently audited**. |
+| `lib/meeting/` | The LiveKit feature module: `config.ts` (the three `LIVEKIT_*` keys, read in one place, all-or-nothing) and `token.ts` (join-token grants — microphone dropped while the member is room-muted). Only tokens travel through the app; media flows browser ↔ LiveKit directly. |
 | `hooks/` | Client data loops shared by community components (`use-community-workspace`: sync loop, optimistic send, realtime merge, decryption states). |
 | `lib/api/responses.ts` | The one error envelope: `{ error: { code, message, issues? } }`. |
 | `lib/supabase/` | `proxy.ts` (session refresh + page redirects), `server.ts` (cookie-scoped server client), `client.ts` (browser client). No service-role key exists in the repo. |
@@ -58,7 +64,7 @@ and never sees plaintext chat (`docs/SECURITY.md` §Communities).
 | `tests/unit` | Vitest, no network: validators, queries against fake builders, every route's status matrix, component behaviour. |
 | `tests/integration` | Vitest against the real local stack with real auth users: RLS/grant probes, RPC races, HTTP-level handler tests. Never uses a service-role key (SQL fixtures go through `docker exec psql`). |
 | `tests/e2e` | Playwright + Chromium driving the real `next dev` app: two-browser flows, WebSocket frame capture/replay, teardown scoped to a per-run user id. |
-| `docs/` | `ARCHITECTURE.md` (this file), `API_CONTRACTS.md`, `SECURITY.md`, `DEVELOPMENT.md`, `local-supabase.md`, `RELEASE.md`, `milestones.md`, `PR_ROADMAP.md`, `prs/*` (per-PR specifications). The operational contract for contributors and agents is `AGENTS.md` at the repository root. |
+| `docs/` | `ARCHITECTURE.md` (this file), `API_CONTRACTS.md`, `SECURITY.md`, `DEVELOPMENT.md`, `local-supabase.md`, `RELEASE.md`, `STAGING.md`, `milestones.md`, `PR_ROADMAP.md`, `prs/*` (per-PR specifications). The operational contract for contributors and agents is `AGENTS.md` at the repository root. |
 
 ## Data model
 
@@ -81,7 +87,7 @@ column (`auto_expose_new_tables = false`):
 | `room_moderators` | Aliases appointed by the room owner — the *only* moderator concept; there is no global role. |
 | `user_blocks` | The blocker's own rows (`blocker_id = auth.uid()` own-rows policy); RPC-only writes; read by the chat filter and the invitation accept. |
 | `rate_limits` | Fixed-window counters for the abuse controls (`0010`). The table carries no grant at all and RLS carries zero policies; the only door in is the `rate_limit_take` RPC (SECURITY DEFINER, executable by `authenticated` only). |
-| `notifications` | The in-app inbox rows (`0012`). Own-row RLS, **no `INSERT` grant for any application role** — writes travel through the two SECURITY DEFINER producers; unread counts through the invoker's-rights `notifications_unread_count()`. |
+| `notifications` | The in-app inbox rows (`0012`). Own-row RLS, **no `INSERT` grant for any application role** — writes travel through the two SECURITY DEFINER producers; unread counts through the invoker's-rights `notifications_unread_count()`; old rows are pruned by a `pg_cron` schedule created in `0024` — a database-side job whose presence must be verified per environment (`docs/RELEASE.md`). |
 | `study_ai_documents` | Per-resource AI ingest state machine (`0013`): `pending → extracting → chunking → embedding → ready \| failed`, provider/model bookkeeping, error codes. |
 | `document_chunks` | Chunk rows for pgvector retrieval (`0013`), read only through `match_document_chunks`. |
 | `study_qa` | Append-only per-user Q&A history (`0018`), written by `record_qa` when an ask lands. |
@@ -106,7 +112,11 @@ that makes the capacity check safe. `0007` factored the seat logic into
 implementation; the core is executable by no application role. Moderation
 follows the same pattern (`0009`): reports, verdicts, mutes, removals,
 appointments and blocks are all definer RPCs so identity, subject-in-room and
-the audit row are proved in one transaction.
+the audit row are proved in one transaction. Communities extend it (`0025`):
+create, join/request, approve, leave, role-set and kick are definer RPCs so
+the membership row change and the `member_count` update commit together —
+`community_members` itself grants clients only `SELECT`, which is what makes
+self-promotion unreachable.
 
 ## Read/write flows
 
@@ -210,6 +220,14 @@ never shown" guarantee exist in exactly one place. Destructive moderation
 actions confirm through Radix `alert-dialog`; everything else answers from
 server truth via `router.refresh()` rather than optimistic local state.
 
+The same workspace carries a **Meeting** toggle (`components/meeting/*`: stage,
+grid, tiles, controls, device pickers). Each join re-mints a LiveKit token
+through `POST /api/rooms/[id]/meeting/token`, which re-proves membership on
+that request; with the three `LIVEKIT_*` keys absent the toggle renders
+disabled with an explanation instead of a join button that would fail, and the
+token route answers `503 meeting_unavailable`. Media itself never transits
+this application — only tokens and room names do.
+
 Invitations surface in two places: the owner's invite panel inside the
 workspace, and the invitee's inbox at `/invitations` (nav-linked). There is
 no public invite URL — invitations are addressed to an alias and only the
@@ -255,6 +273,7 @@ the code reads a key it does not document. The short version:
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The local or hosted project; the publishable key only — no service-role key exists anywhere in the repo. |
 | `AI_PROVIDER`, `AI_API_KEY`, `AI_BASE_URL` | Server-side AI credentials; `mock` (or a missing key) runs the demo-mode pipeline with canned answers. |
 | `AI_*` model/limit keys | Optional overrides read server-side only (see `.env.example` for the exact names). |
+| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | LiveKit meeting tokens — three keys, all required together, server-side only, never `NEXT_PUBLIC_*`. Unconfigured → the Meeting toggle disables and `POST /api/rooms/[id]/meeting/token` answers `503 meeting_unavailable`. |
 | `GIF_PROVIDER` / `GIF_API_KEY` | Server-side GIF provider for the community composer (`tenor` or `giphy`, both required together). Never `NEXT_PUBLIC_*`; with either empty the tab hides and the proxies answer `503 gif_unavailable`. |
 
 ## Where decisions live
