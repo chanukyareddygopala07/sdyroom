@@ -28,9 +28,9 @@ missing integration suite can never silently pass a gate.
 2. Environment (see below) either exported or present in `.env.local`.
 
 Setup refuses to start with an actionable error if the URL or key is missing, if the
-API never answers `/auth/v1/health`, or if `public.rooms` / `public.room_members` /
-`public.profiles` have not been migrated. It polls for readiness — there are no fixed
-sleeps.
+API never answers `/auth/v1/health`, or if the core tables (`public.rooms`,
+`public.room_members`, `public.profiles` and the `communities` pair, among others)
+have not been migrated. It polls for readiness — there are no fixed sleeps.
 
 ## Environment variables
 
@@ -82,6 +82,7 @@ remote or production project.
 | `ai-ingestion.test.ts` | The pgvector foundation and owner ingest loop: the fixed 1536-wide column, a text-layer PDF driven one-step to `Ready for AI`, and every chunk stored with a 1536-dimensional vector and a 64-char hash |
 | `notifications.test.ts` | Notification grants and production writes: no `INSERT` grant anywhere (direct PostgREST and service-role paths refused), and the producer authorization that lets a room owner push `member_removed` to a member |
 | `analytics.test.ts` | The analytics grant surface and `GET /api/analytics/me`: the functions exposed to authenticated callers and to nobody else, session required, strict range validation, and the owner's fixture with the summary equal to the day buckets |
+| `communities.test.ts` | The communities feature against the live stack: the SELECT-only `community_members` freeze with the owner-only `communities` delete, the six-definer-RPC `has_function_privilege` matrix (`create_community`, `join_community`, `leave_community`, `set_community_member`, `kick_community_member`, `community_roster`) with anon denied, exactly three named storage policies, realtime publication with anon denied, strict create bodies and the slug `409`, private rows indistinguishable from missing ones in every read, join/request flows and the `include_requested` roster gate, staff-only channel position booking, opaque idempotent message envelopes paged back to members only, addressed welcomes, device registration through sync and key packages, reporter/staff-scoped reports with a voluntary excerpt, member-only signed attachments with hostile-path refusal, bans/kicks/leaves and owner-only deletion, and the create-window `429` |
 | `production-hardening.test.ts` | Liveness and readiness for the release: `GET /api/health` answering `200` with the version and never probing a dependency, `GET /api/health/ready` naming storage when it alone is degraded, and error envelopes correlating to server logs via `request_id` |
 
 ### How fixtures are made
@@ -114,7 +115,8 @@ is needed locally or in CI.
 
 Every test file deletes exactly the auth users it created, by id, in `afterAll`.
 `on delete cascade` removes their profiles, rooms, memberships, focus sessions, goals,
-messages and study resources and nothing else (each file re-asserts its own residue is
+messages, study resources and communities (with their channels, members, messages,
+welcomes and attachments) and nothing else (each file re-asserts its own residue is
 gone).
 Files run serially (`fileParallelism: false`) because they share one database: an
 assertion about "no rows" must not observe another file's fixtures.

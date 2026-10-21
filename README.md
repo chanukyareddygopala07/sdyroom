@@ -410,8 +410,8 @@ Tailwind CSS 4 migration (removing the `tailwindcss@3` → `chokidar` → `brace
 
 ##  Testing
 
-Current suite: **1713 unit** (154 files), **440 integration** (25 files), **87 e2e**
-(22 specs).
+Current suite: **1935 unit** (171 files), **465 integration** (26 files), **88 e2e**
+(23 specs).
 
 - `npm test` (alias `npm run test:unit`) runs `vitest run` over `tests/unit/**` in the
   Node environment. It never contacts Supabase and passes without a local stack running.
@@ -440,13 +440,20 @@ Current suite: **1713 unit** (154 files), **440 integration** (25 files), **87 e
   `profile:{userId}` window) — and meeting tokens end to end (the
   membership-gated mint with its room-scoped JWT claims, the muted member's
   microphone-less grant until the mute lifts, the indistinguishable `404`s,
-  the honest `503` while unconfigured, and the per-room `429` burst) —
+  the honest `503` while unconfigured, and the per-room `429` burst) — and
+  communities end to end (the SELECT-only membership freeze with the owner-only
+  `communities` delete and the six-definer-RPC privilege matrix including
+  `community_roster`, the three named storage policies, creation validation and
+  slug `409`, private-row `404` parity, join/request flows, opaque idempotent
+  message envelopes and addressed welcomes, device registration with sync and
+  key packages, reporter/staff-scoped reports, member-only signed attachments,
+  bans/kicks/leaves/owner deletion, and the create-window `429`) —
   every suite shares a single control test that widens a grant and rolls it back.
   It needs
   the local stack (`npx supabase start && npx supabase db reset`) and never uses a
   service-role key. `passWithNoTests` stays unset, so a missing suite still exits
   non-zero. See `tests/integration/README.md`.
-- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 81 Chromium tests
+- `npm run test:e2e` runs `playwright test` over `tests/e2e/**` — 88 Chromium tests
   driving the real app (`next dev`) against the local stack: the full two-student
   workflow through the forms, private-room access, room chat, room presence across
   two browsers, the invitation lifecycle (invite by alias → inbox → accept, stranger
@@ -464,7 +471,12 @@ Current suite: **1713 unit** (154 files), **440 integration** (25 files), **87 e
   announced and reflected in the header and the room roster, exam targets and
   language persisted across a read-back, a notification preference surviving a
   reload, invalid aliases surfacing inline `role="alert"` errors, and sign-out
-  from the account section guarding the app afterwards). Test users are scoped to a per-run id and deleted
+  from the account section guarding the app afterwards), and the encrypted
+  community journey in two real browsers (owner creates a community and
+  bootstraps its channel group, a second student joins and is honestly locked
+  until the owner's next sync Adds their device and addresses the welcome,
+  pre-join history staying opaque and saying so, then messages crossing both
+  browsers live). Test users are scoped to a per-run id and deleted
   by the global teardown (which also removes this run's storage objects before its
   `auth.users` rows). It needs the local stack plus `npx playwright install chromium`.
   See `tests/e2e/README.md`.

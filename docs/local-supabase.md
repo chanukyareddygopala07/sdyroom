@@ -146,6 +146,23 @@ as `0001`/`0012` — `revoke all … from anon` re-asserts the floor, then
 explicit column privileges `select`/`insert`/`update (language)` to
 `authenticated`, additive to the profile grants that already exist.
 
+`supabase/migrations/0025_communities_e2ee.sql` adds the end-to-end-encrypted
+communities surface: eight tables (`communities`, `community_members`,
+`community_channels`, `community_messages`, `community_welcomes`,
+`community_devices`, `community_attachments`, `community_reports`), a
+**second private storage bucket** (`community-attachments`) with three
+path-derived policies, eight SECURITY DEFINER functions (`create_community`,
+`join_community`, `leave_community`, `set_community_member`,
+`kick_community_member`, `community_roster`, plus the `is_community_member`
+/ `is_community_staff` predicates RLS itself calls), twenty table policies,
+and the `community_messages` entry in the `supabase_realtime` publication.
+Every one of the eight tables starts revoked from `anon`, `authenticated` and
+`service_role` (revoke-first, like `0003`) and receives only the verbs it
+needs — `community_members` is `SELECT`-alone, so every membership write
+(create/join/leave/set/kick) is RPC-only, and message, commit and welcome
+rows hold base64 MLS envelopes only: opaque by design, decrypted on devices
+(`docs/SECURITY.md` §Communities).
+
 | Table | Key columns | Notes |
 | --- | --- | --- |
 | `profiles` | `id` → `auth.users`, `alias`, `exam_targets`, `language`, `notification_prefs`, `created_at` | No email, no auth metadata, no other PII. `alias` 1–32 chars, trimmed, unique on `lower(alias)` (case-insensitive, no `citext`). `exam_targets` is a `jsonb` array, default `'[]'`. `language` (`0023`) is nullable, trimmed, ≤ 40 chars (values from `lib/vocab/languages.ts`, enforced at the API). `notification_prefs` (`0012`) is a `jsonb` object of per-category values from `all`/`mentions_and_invites`/`none` plus a `default` key (default `'{"default": "all"}'`), writable only through a narrow column-level `UPDATE` grant. |
@@ -168,6 +185,14 @@ explicit column privileges `select`/`insert`/`update (language)` to
 | `flashcard_reviews` | `id`, `artifact_id` → `study_artifacts`, `user_id` → `auth.users`, `card_ordinal`, `grade`, `streak`, `ease`, `interval_days`, `last_reviewed_at`, `next_review_at` | The per-user SM-2-lite schedule (`0019`): `grade` ∈ `again`/`got_it`, `streak` ≥ 0, `ease` ≥ 1.3, `interval_days` ≥ 0, and `next_review_at` the next time the card is due. `unique (artifact_id, user_id, card_ordinal)` plus the `review_card` upsert means grading a card twice moves the schedule instead of stacking rows. `select` is column-scoped; **no write grant for any role**. Index on `(user_id, next_review_at)` for the due-cards query. |
 | `study_plans` | `id`, `user_id` → `auth.users`, `room_id` → `rooms` (nullable), `status`, `error_code`, `exam_date`, `hours_per_day`, `topics` (text[]), `document_ids` (uuid[]), `summary`, `model`, `prompt_tokens`, `completion_tokens`, `generated_at`, `archived_at`, `created_at`, `updated_at` | One personal study plan (`0020`). `status` ∈ `generating`/`active`/`archived`/`failed`; `error_code` ∈ `ai_provider_failed`/`ai_quota_exceeded` (null otherwise); `hours_per_day` 1–12; `topics`/`document_ids` ≤ 25 entries; `study_plans_active_generated_check` requires `generated_at` on `active` rows. **One active and one generating row per user** are partial unique indexes (`study_plans_one_active`, `study_plans_one_generating`), and `regenerate: true` archives the active row in the same transaction as the insert. `select` is column-scoped (all but `prompt_tokens`/`completion_tokens` — the same posture as `study_qa`/`study_artifacts`); **no write grant for any role** — inserts go through `create_plan`, the flip to `active`/`failed` through `generate_plan`/`fail_plan`, the end through `archive_plan`. Index on `(user_id, status, created_at desc)` for the list route. |
 | `plan_items` | `id`, `plan_id` → `study_plans`, `ordinal`, `item_date`, `subject`, `task`, `kind`, `estimated_minutes`, `resource_id` → `study_resources` (nullable, `on delete set null`), `citation` (jsonb), `done_at`, `created_at`, `unique (plan_id, ordinal)` | The day-by-day checklist (`0020`). `kind` ∈ `read`/`practice`/`review`/`mock`/`rest`; `estimated_minutes` 1–480; `citation` is null-or-object and **rebuilt server-side** from the pinned `resource_id` (`{title, href}`) — a fabricated id raises `plan_invalid` in `generate_plan` and a deleted document nulls the reference without touching the citation the RPC stored. `done_at` is the first-completion timestamp (`mark_plan_item` never rewrites it). `select` is column-scoped to the whole surface; **no write grant for any role** — inserts go through `generate_plan`, the done flip through `mark_plan_item`/`complete_plan_day`/`shift_plan`. Indexes on `(plan_id, item_date, ordinal)` (the schedule order) and a partial `(plan_id) where done_at is null` (the working set every progress read and shift window filters on). |
+| `communities` | `id`, `slug` (unique), `name`, `description`, `category`, `visibility`, `join_policy`, `rules`, `owner_id` → `auth.users`, `member_count`, `created_at`, `updated_at` | One encrypted community (`0025`). CHECKs pin the slug format (`^[a-z0-9][a-z0-9-]{2,38}[a-z0-9]$`), name 3–60 trimmed, description ≤ 1000, rules ≤ 2000, the six-value `category`, `visibility ∈ public/private`, `join_policy ∈ open/request`, the `private → request` pairing (`communities_private_is_request`) and `member_count ≥ 1`. `owner_id` cascades with the account. Discovery index `communities_discovery_idx (visibility, category, created_at desc)`. Grants `SELECT/INSERT/UPDATE/DELETE`, but the four policies make it: visible = public **or** member, insert = owner-self, update = staff, delete = owner. |
+| `community_members` | PK `(community_id, user_id)`, `role`, `status`, `joined_at`, `updated_at` | Membership (`0025`). `role ∈ owner/moderator/member`, `status ∈ active/requested/banned`; partial unique index `community_members_one_owner (community_id) where role = 'owner'` pins exactly one owner. Index on `(user_id, status)`. **`SELECT` grant alone** — every membership write is a SECURITY DEFINER RPC, so self-promotion, self-unban, ban bypass and `member_count` drift are unreachable over PostgREST. |
+| `community_channels` | `id`, `community_id` → `communities`, `name`, `slug`, `description`, `position`, `created_at` | One channel per MLS group (`0025`). Name 1–40 trimmed, slug `general` or kebab (`unique (community_id, slug)`), description ≤ 200; `position` booked by the staff route as `max + 1`. `SELECT`/`INSERT` only; index on `(community_id, position, created_at)` for the sidebar order. |
+| `community_messages` | `id`, `channel_id` → `community_channels`, `community_id`, `sender_id` → `auth.users`, `sender_device_id`, `kind`, `ciphertext`, `client_msg_id`, `seq` (identity), `created_at` | The encrypted stream (`0025`). `kind ∈ application/commit`; `ciphertext` base64, 16–262 144 chars; `sender_device_id` 8–64; `unique (channel_id, client_msg_id)` makes sends idempotent; `seq` gives the `before=` cursor. **Append-only** (`SELECT`/`INSERT` only, like `room_messages`); index on `(channel_id, seq desc)`; published to `supabase_realtime` — frames carry the stored ciphertext row. |
+| `community_welcomes` | `id`, `channel_id`, `community_id`, `recipient_user_id` → `auth.users`, `recipient_device_id`, `sender_id`, `ciphertext`, `ratchet_tree`, `client_msg_id`, `seq` (identity), `created_at` | One addressed MLS welcome (`0025`): ciphertext 16–262 144 base64, `ratchet_tree` 16–1 MiB base64 (public leaf nodes only — RFC 9420's out-of-band distribution), recipient device id 8–64, `unique (channel_id, client_msg_id)`. `SELECT` is recipient-or-sender only; `INSERT` sender-plus-member. |
+| `community_devices` | PK `(user_id, device_id)`, `key_package`, `signature_public_key`, `created_at`, `refreshed_at` | Published MLS key packages (`0025`) — public credential material by design, never a private key, and registering one joins no community (no community column exists). Device id 8–64, key package base64 64–65 536, signature key 16–256. Own-row `SELECT`/`INSERT`/`UPDATE`/`DELETE`, with a world-readable `SELECT` policy (`devices_select_authenticated`) because peers must fetch packages to run Add commits. |
+| `community_attachments` | `id`, `community_id`, `channel_id`, `uploader_id` → `auth.users`, `storage_path` (unique), `ciphertext_size`, `content_type`, `created_at` | The ciphertext pointer (`0025`): bytes live in the `community-attachments` bucket; this row stores size (1–10 485 760), type and path only — never a file name, never plaintext. Path pinned by CHECK to exactly `community-attachments/{cid}/{chan}/{aid}`. `SELECT`/`INSERT`/`DELETE`; select = member, insert = own-plus-member, delete = uploader. |
+| `community_reports` | `id`, `community_id`, `reporter_id` → `auth.users`, `target_type`, `target_id`, `reason`, `context_excerpt`, `created_at` | Voluntary reports (`0025`): `target_type ∈ message/member`, reason 1–500 trimmed, `context_excerpt` nullable ≤ 2 000 — the reporter's **deliberate plaintext** slice, because the server cannot scan ciphertext. `SELECT`/`INSERT` only: insert = own-plus-member, select = reporter-or-staff; there is no status machine. |
 
 No sample rooms and no fabricated auth users are inserted by SQL: `supabase/seed.sql`
 is intentionally empty, and local test data is made only through the Auth API and the
@@ -187,7 +212,12 @@ by the subscriber's own `SELECT` RLS and a `user_id=eq.<me>` frame filter;
 `study_goals` and `study_resources` are
 deliberately not published (goals refetch, they are never pushed; files are listed
 on demand, and a push would carry no bytes — downloads always go through the
-signed-URL endpoint).
+signed-URL endpoint);
+`community_messages` (`0025`) joins the publication for the encrypted chat
+feed — the frame is the stored row (ciphertext plus metadata, never
+plaintext), delivery is filtered per subscriber by the `messages_select_member`
+policy exactly like `room_messages`, and clients merge inserts additively
+behind the same "one catch-up read on ack" discipline.
 
 ## Grants
 
@@ -285,6 +315,24 @@ no route or parameter can widen them.
 `tests/integration/room-discovery.test.ts` freezes the surface (authenticated
 execute, anon refusal) alongside the privacy bait.
 
+The communities surface (`0025`) repeats the revoke-first shape for eight
+tables: `revoke all … from anon, authenticated, service_role` first, then
+exactly the verbs the API and policies need —
+`communities` gets `SELECT/INSERT/UPDATE/DELETE` (all four policy-gated:
+visible, owner-self insert, staff update, owner delete), `community_members`
+gets **`SELECT` alone** (every membership write — create/join/leave/set/kick —
+is a SECURITY DEFINER RPC, which closes self-promotion, self-unban, ban
+bypass and `member_count` drift at the privilege layer, before RLS is even
+consulted), `community_channels`/`community_messages`/`community_welcomes`/
+`community_reports` get `SELECT/INSERT` (messages are append-only like
+`room_messages`), `community_attachments` gets `SELECT/INSERT/DELETE`, and
+`community_devices` gets the full own-row `SELECT/INSERT/UPDATE/DELETE` for
+its account-level key packages. Execute on all eight `0025` functions is
+revoked from `public`/`anon` and granted only to `authenticated`;
+`tests/integration/communities.test.ts` freezes the whole matrix
+(`has_function_privilege` in both directions with full identity argument
+lists, plus the three storage policies).
+
 **No `UPDATE` or `DELETE` grant on `rooms` / `room_members` — and since `0008`
 that is a deliberate design, not an undeveloped flow.** Room edits and deletion go
 exclusively through the `update_room` / `delete_room` SECURITY DEFINER RPCs
@@ -370,9 +418,17 @@ rows.
 | `flashcard_reviews` | `flashcard_reviews_select_own` (`0019`) | own rows **and** a current `room_members` row for the artifact's room — a student reads only their own spacing state. No insert/update/delete policy **and** no matching grant: `review_card` is the only writer |
 | `study_plans` | `study_plans_select_own` (`0020`) | `user_id = auth.uid()` — a student reads only their own plans, and a foreign id is indistinguishable from a missing one (404 parity). No insert/update/delete policy exists **and** no matching grant does either: the table is RPC-only |
 | `plan_items` | `plan_items_select_own` (`0020`) | own rows resolved through the owning plan (the subquery itself runs under this role, so `study_plans_select_own` applies there too). No insert/update/delete policy **and** no matching grant: `generate_plan`/`mark_plan_item`/`complete_plan_day`/`shift_plan` are the only writers |
+| `communities` | `communities_select_visible` / `insert_self_owner` / `update_staff` / `delete_owner` (`0025`) | read = `visibility = 'public' or is_community_member(id)` (a private row is invisible to a stranger — the `404` parity starts here); insert requires `owner_id = auth.uid()` (the owner membership row only exists inside `create_community`, so a direct write cannot pass); update = `is_community_staff(id)`; delete = an owner row for `auth.uid()` |
+| `community_members` | `members_select_own_or_roster` (`0025`) | own rows (`user_id = auth.uid()`) **or** any row while the caller is an active member of that community — co-members can see each other's role/status, a stranger sees nothing. Deliberately **one policy, one verb**: there is no insert/update/delete policy **and no write grant either**, so membership changes are RPC-only (second layer) |
+| `community_channels` | `channels_select_member` / `channels_insert_staff` (`0025`) | read = active membership; insert = `is_community_staff(id)` — position booking and channel creation are staff-gated at both layers |
+| `community_messages` | `messages_select_member` / `messages_insert_own_member` (`0025`) | read = active membership (this is also what filters realtime delivery); insert = `sender_id = auth.uid()` plus membership of the channel's community. Append-only: no update/delete policy **and** no such grant, so history cannot be edited even before RLS is considered |
+| `community_welcomes` | `welcomes_select_recipient_or_sender` / `welcomes_insert_member` (`0025`) | read = the addressed device's user **or** the sender (nobody else — an welcome's ratchet tree must not leak to co-members); insert = sender pin plus membership |
+| `community_devices` | `devices_select_authenticated` / `devices_insert_own` / `devices_update_own` / `devices_delete_own` (`0025`) | key packages are public credential material by design — any signed-in user may `SELECT` them (peers must fetch packages to run Add commits) — while every write is `user_id = auth.uid()` on both sides of the statement |
+| `community_attachments` | `attachments_select_member` / `attachments_insert_own_member` / `attachments_delete_own` (`0025`) | read = active membership; insert = own row plus membership; delete = uploader only. The bytes are additionally gated by the storage policies below |
+| `community_reports` | `reports_insert_own_member` / `reports_select_own_or_staff` (`0025`) | insert = `reporter_id = auth.uid()` plus membership (identity pinned in the row, never taken from a body); read = the reporter's own rows or `is_community_staff(id)` — staff see the inbox, members see only what they filed. No status machine and no update/delete verb |
 | `realtime.messages` | `room_presence_select_member` / `room_presence_insert_member` (`0006`) | the whole of the private-channel gate for `room-presence-{uuid}` topics: `authenticated` only, extension must be `broadcast`/`presence`, and the uuid in the topic must match a current `room_members` row for `auth.uid()` — so a non-member (or an anonymous client) cannot join, cannot confirm a private room exists, and cannot read another room's roster. Realtime's authorization probes run as the caller inside a transaction that rolls back, so nothing is ever written |
 
-Storage objects have their own four policies (next section); they are not listed
+Storage objects have their own seven policies (next section); they are not listed
 above because they live on `storage.objects`, not on a table in `public`. The
 `realtime.messages` row **is** listed even though that table lives in the `realtime`
 schema: it carries no data of ours — it is Realtime's authorization surface.
@@ -380,9 +436,9 @@ schema: it carries no data of ours — it is Realtime's authorization surface.
 There are **no policies for `anon` on any table** (verified: 0 policies for roles other
 than `authenticated`), and anon holds no table privileges either.
 
-## Private storage bucket (`0005_study_resources.sql`)
+## Private storage buckets (`0005_study_resources.sql`, `0025_communities_e2ee.sql`)
 
-`storage.buckets` is written by the migration itself, so `supabase db reset`
+`storage.buckets` is written by the migrations themselves, so `supabase db reset`
 provisions the whole feature — CI and a fresh checkout need nothing beyond the
 migrations they already run (`on conflict` keeps it idempotent for a stack that
 already has it):
@@ -390,8 +446,9 @@ already has it):
 | Bucket | `public` | `file_size_limit` | `allowed_mime_types` |
 | --- | --- | --- | --- |
 | `study-resources` | **false** | 20 971 520 (20 MiB) | `application/pdf`, `image/png`, `image/jpeg`, `text/plain`, `text/markdown` |
+| `community-attachments` (`0025`) | **false** | 10 485 760 (10 MiB) | `application/octet-stream` (the only type storage will accept — clients upload **ciphertext**, so no media type could honestly describe it) |
 
-The bucket's two limits are belt-and-braces under the API's own checks: the
+The `study-resources` bucket's two limits are belt-and-braces under the API's own checks: the
 route refuses on `content-length` before the body is buffered and sniffs the
 bytes after parsing, and storage independently refuses any put that slips past
 either. Per-user and per-room byte budgets are **not** a bucket setting (a
@@ -400,20 +457,24 @@ enforced by the `study_resources_quota_guard` BEFORE INSERT trigger.
 
 There is no code path that produces a permanent URL for these bytes.
 
-**Key layout.** Two shapes only, both built from server-generated UUIDs:
+**Key layout.** Three shapes, all built from server-generated UUIDs:
 
 ```
-personal/{owner}/{id}{ext}            the uploader, and nobody else
-rooms/{room}/{owner}/{id}{ext}        current members of {room}
+personal/{owner}/{id}{ext}                          the uploader, and nobody else
+rooms/{room}/{owner}/{id}{ext}                      current members of {room}
+community-attachments/{community}/{channel}/{id}    active members of {community}
 ```
 
 `storage.foldername(name)` splits on `/` and returns every segment *except* the
-last, so those keys resolve to array lengths **2** and **3** respectively. The
+last, so those keys resolve to array lengths **2**, **3** and **3** respectively
+(the community shape has no file name at all — the original name travels
+inside the E2EE payload). The
 policies check `array_length(...) = n` exactly, which is what makes the layout
 strict: a key with extra segments lands on a different length and is denied, so
 `personal/{owner}/../../x` cannot be made to line up. Indexing past the end
 yields `NULL`, which compares to `NULL` and fails closed, and membership is
-matched as `m.room_id::text = segment` — text against text, so no
+matched as `m.room_id::text = segment` (or `m.community_id::text = segment`)
+— text against text, so no
 attacker-controlled segment is ever cast to `uuid` (no cast error to turn into
 an oracle).
 
@@ -423,6 +484,9 @@ an oracle).
 | `study_resources_objects_insert` | `INSERT` | `owner = auth.uid()` plus the matching layout, so storage's own record of who wrote the object must agree with the path |
 | `study_resources_objects_delete` | `DELETE` | `owner = auth.uid()` — one member can never remove another's upload by talking to storage directly, and the API can still clean up after a failed metadata insert |
 | `study_resources_objects_delete_room_owner` (`0008`) | `DELETE` | any `rooms/{room}/…` key whose matching `study_resources` row belongs to a room `auth.uid()` **owns** — OR'd with the uploader-only policy above, so the owner can sweep member-uploaded objects when deleting the room, and nothing else. Proven by `tests/integration/room-management.test.ts`: the room owner removes a member's object, a stranger's remove changes nothing, the uploader still can |
+| `community_attachments_select_member` (`0025`) | `SELECT` | any `community-attachments/{cid}/…` key while an **active** `community_members` row for `auth.uid()` matches segment 2 (text against text) — leaving, being kicked or banned revokes object reads on the next request, with no object moved |
+| `community_attachments_insert_member` (`0025`) | `INSERT` | `owner = auth.uid()` **and** active membership of the community named in the path — the layout check still applies, and the path format is independently pinned by the table's `CHECK` |
+| `community_attachments_delete_uploader` (`0025`) | `DELETE` | the matching `community_attachments` row's `uploader_id = auth.uid()` — deletion is keyed off the metadata row, so a member can never remove another's ciphertext by talking to storage directly |
 | *(none)* | `UPDATE` | default deny; nothing in the app rewrites an object |
 
 Because the key carries the scope, a hand-written `POST /storage/v1/object/…` is
@@ -759,37 +823,64 @@ select vector_dims(embedding)          -- after at least one ingest
 | `room_preview(p_room_id) → jsonb` (`0022`) | Public-safe detail: a public room is visible to any session; a private room is visible only to its members; a private non-member room and a missing room both raise the same `P0002` (the route maps either to the identical `404`). Returns the shaped row plus `is_member` and `viewer_role` (owner → `"owner"`, student → `"member"`, null → `"none"`). |
 | `room_filter_options() → jsonb` (`0022`) | The distinct non-null `subject`/`exam_track`/`language` values of public rooms only (≤ 100 each) — a private room's metadata never reaches a filter chip. |
 
+## Community functions (`0025_communities_e2ee.sql`)
+
+All eight are SECURITY DEFINER (`prosecdef = t`, `set search_path = public`),
+execute revoked from `public`/`anon` and granted to `authenticated` only:
+
+| Function | Effect |
+| --- | --- |
+| `create_community(p_name, p_slug, p_description, p_category, p_visibility, p_join_policy, p_rules)` | One transaction: the community row, the caller's `owner` membership row and the default `general` channel at position 0; pins `owner_id = auth.uid()`, floors `member_count` at 1, and maps the unique-slug race to the `slug_taken` refusal the route returns as `409`. |
+| `join_community(p_community_id)` | Pins `auth.uid()`; missing community → not-found, banned → refused, already active/requested → idempotent `200`; a private or request-policy community files a `requested` row instead of activating; the open path inserts `active` and increments `member_count` in the same transaction. |
+| `leave_community(p_community_id)` | No row → not-found; the owner → `owner_cannot_leave` (`409` on the route — transfer or delete first); otherwise deletes the caller's row and decrements `member_count` only when the row was `active` (floored at 1). This is the same RPC the self-`DELETE …/members/[userId]` path runs. |
+| `set_community_member(p_community_id, p_user_id, p_role, p_status)` | Staff-only role/status changes with in-definer guards: `member_not_found` → `404`, `owner_protected` → `409` (the owner never changes), `not_owner` → `403` (only the owner appoints moderators), `not_staff` → `403` (the gate-vs-race defence). Approving `requested` bumps `member_count`; moving to `banned`/`requested` decrements it. Ban/kick also drop the API/RLS gates immediately — the epoch-advancing MLS `Remove` commit is left to a remaining member's next client sync. |
+| `kick_community_member(p_community_id, p_user_id)` | Staff-only removal of somebody else (self-removal never reaches here — the route sends the caller's own `DELETE` to `leave_community` instead). Same `member_not_found`/`owner_protected`/`not_staff` guards, honest `member_count` decrement; no `DELETE` grant exists on `community_members`, so this function **is** the only removal path. |
+| `community_roster(p_community_id, p_include_requested)` | Returns `(user_id, role, status, joined_at, alias)` — alias resolved with a `left join profiles` because `profiles` is SELECT-own and no FK path reaches it (the `room_roster` reasoning). Raises `42501` for non-members; `p_include_requested` is refused unless the caller is `owner`/`moderator` (so a direct call cannot out-run the route's `403`); ordered `joined_at asc`, `limit 500`. |
+| `is_community_member(p_community_id)` / `is_community_staff(p_community_id)` | The two predicates RLS itself calls. SECURITY DEFINER so a policy asking "is the caller an active member?" does not recurse into `community_members`' own policies; they return boolean only (no data leaks), and every caller may already learn their own membership. `tests/integration/communities.test.ts` probes execute privilege and anon refusal for all eight. |
+
 ## Verification performed
 
 All against the local stack. Structural:
 
 ```bash
 npx supabase db lint --local        # exit 0: "No schema errors found"
-npx supabase db reset               # exit 0: applied 0001 … 0024 (0014–0017 never existed)
-npx supabase migration list --local # 0001 … 0024 present locally
+npx supabase db reset               # exit 0: applied 0001 … 0025 (0014–0017 never existed)
+npx supabase migration list --local # 0001 … 0025 present locally
 ```
 
 Observed from `pg_catalog` / `information_schema` on 127.0.0.1:54322:
 
-- RLS enabled on all twenty-four `public` tables (`relrowsecurity = t`),
+- RLS enabled on all thirty-two `public` tables (`relrowsecurity = t`),
   including the three `0019` quiz tables (`study_artifacts`, `quiz_attempts`,
-  `flashcard_reviews`) and the two `0020` plan tables (`study_plans`,
-  `plan_items`). `0023` adds no table — only `profiles.language`.
+  `flashcard_reviews`), the two `0020` plan tables (`study_plans`,
+  `plan_items`) and the eight `0025` community tables (`communities`,
+  `community_members`, `community_channels`, `community_messages`,
+  `community_welcomes`, `community_devices`, `community_attachments`,
+  `community_reports`). `0023` adds no table — only `profiles.language`.
 - `profiles.language` (`0023`): nullable `text`, CHECKs `profiles_language_len`
   (1–40) and `profiles_language_trimmed`; column privileges
   `select`/`insert`/`update (language)` for `authenticated`, and `anon`
   holds nothing on `profiles` (the migration's `revoke all` re-asserts it).
-- 33 table policies on `public.*`, every one `to authenticated`; the `0019`
+- 55 table policies on `public.*`, every one `to authenticated`; the `0019`
   migration adds three select policies (`study_artifacts_select_member`,
   `quiz_attempts_select_own`, `flashcard_reviews_select_own`) and, like `0013`/
-  `0018`, **no write policy anywhere**. Plus the two `0006` policies on
-  `realtime.messages` and the 4 storage policies on `storage.objects` for
-  `study-resources` — 0 policies for any role other than `authenticated`
-  across all of them.
-- 57 SECURITY DEFINER functions on `public`; the six `0019` RPCs
+  `0018`, **no write policy anywhere**; `0025` adds twenty (four on
+  `communities`, one on `community_members`, two each on `community_channels`,
+  `community_messages`, `community_welcomes`, `community_reports`, three on
+  `community_attachments`, four on `community_devices`). Plus the two `0006`
+  policies on `realtime.messages` and the 7 storage policies on
+  `storage.objects` (4 for `study-resources`, 3 for `community-attachments`) —
+  0 policies for any role other than `authenticated` across all of them.
+- 78 SECURITY DEFINER functions on `public`; the six `0019` RPCs
   (`create_artifact`, `complete_artifact`, `fail_artifact`, `delete_artifact`,
   `record_attempt`, `review_card`) are `prosecdef = t` with
-  `search_path = ''` and execute revoked from `public`/`anon`.
+  `search_path = ''` and execute revoked from `public`/`anon`. `0025`
+  contributes eight more (`create_community`, `join_community`,
+  `leave_community`, `set_community_member`, `kick_community_member`,
+  `community_roster`, `is_community_member`, `is_community_staff`), each
+  `prosecdef = t`, `search_path = public`, execute granted to `authenticated`
+  only — probed in both directions by `tests/integration/communities.test.ts`
+  with full identity argument lists.
 - The five `0009` tables: zero table grants on `moderation_reports`,
   `moderation_actions` and `room_moderators` for every API role (verified:
   the only grants in `information_schema.role_table_grants` belong to
@@ -941,7 +1032,10 @@ Rate limits, quotas and the sweep (`0010_resource_hardening.sql`), verified on
   grant, so both flow through the `update_room` / `delete_room` definer RPCs.
 - Authenticated API behaviour is covered by `tests/integration/` (run it with
   `npm run test:integration`); the schema itself is proven by `db lint` and `db reset`.
-- The `study-resources` bucket is created by `0005`, so a reset provisions it too;
-  object access always goes through a 300-second signed URL issued after a fresh
-  authorization check. The threat model behind all of this is written down in
-  `docs/SECURITY.md`, and the endpoint contracts in `docs/API_CONTRACTS.md`.
+- The `study-resources` bucket is created by `0005` and the
+  `community-attachments` bucket by `0025`, so a reset provisions both;
+  object access always goes through a short-lived signed URL issued after a
+  fresh authorization check. The threat model behind all of this is written down in
+  `docs/SECURITY.md`, and the endpoint contracts in `docs/API_CONTRACTS.md`
+  (community chat is end-to-end encrypted — the MLS library `ts-mls` behind it
+  has **not** had an independent security audit; see `docs/SECURITY.md` §Communities).

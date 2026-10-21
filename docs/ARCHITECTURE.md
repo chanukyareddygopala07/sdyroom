@@ -18,8 +18,9 @@ Next.js App Router (app/)                     — server components render reads
 Supabase (local stack, no service role anywhere)
   ├─ Postgres: RLS + column grants + SECURITY DEFINER RPCs   (authority)
   ├─ Auth:    session claims, `auth.uid()`                    (identity)
-  ├─ Realtime: focus/chat postgres_changes, presence channels (delivery)
-  └─ Storage: private bucket + per-object policies            (bytes)
+  ├─ Realtime: focus/chat/communities postgres_changes,
+  │            presence channels                              (delivery)
+  └─ Storage: private buckets + per-object policies           (bytes)
 ```
 
 Two rules define the codebase:
@@ -33,19 +34,27 @@ Two rules define the codebase:
 2. **Identity is never a parameter.** Handlers read the Supabase session
    claims; RPCs read `auth.uid()`; nothing accepts "on behalf of" input.
 
+One payload rule sits beside them: in communities, the database stores
+**ciphertext** — message bodies are encrypted and decrypted on devices
+(`ts-mls`, MLS), so the server validates envelope structure and membership
+and never sees plaintext chat (`docs/SECURITY.md` §Communities).
+
 ## Directory map
 
 | Path | Responsibility |
 | --- | --- |
-| `app/(app)/*` | Signed-in pages (rooms and the workspace, resources, invitations, settings, analytics, planner, onboarding). Pages `export const instant = false` (the app runs with `cacheComponents`) and are session-gated by `lib/supabase/proxy.ts`; most carry `loading.tsx`/`error.tsx` boundaries. |
+| `app/(app)/*` | Signed-in pages (rooms and the workspace, resources, invitations, settings, analytics, planner, onboarding, communities and the community workspace). Pages `export const instant = false` (the app runs with `cacheComponents`) and are session-gated by `lib/supabase/proxy.ts`; most carry `loading.tsx`/`error.tsx` boundaries. `/communities/[id]` splits into a server page (metadata + session gate) and the client `components/communities/community-detail.tsx` because route-segment config may only be exported from a server file. |
 | `app/api/*` | Route handlers. Validate with Zod, map domain errors onto the single error envelope, never touch SQL directly. |
 | `components/*` | Presentational + client-interactive components. They fetch through `lib/` query modules or the documented `/api/*` endpoints; they never construct storage URLs or identity fields themselves. |
 | `lib/validation/*` | Zod schemas mirroring the database CHECK constraints — trim before length, blank → `null`, no identity fields. |
 | `lib/<feature>/` | One module per feature: `queries.ts` (reads/writes through the user-scoped client), `types.ts` (response shaping with explicit column lists), errors with stable codes. |
 | `lib/rooms/access.ts` | The shared membership/ownership gates (`requireRoomMembership`, `requireRoomOwner`) that give non-members the same `404` as a missing room. |
+| `lib/communities/` | The community feature module: `access.ts` (membership/staff/visibility gates with the same `404` parity), `queries.ts` (RPC-backed reads/writes with `CommunityError` codes), `sync.ts` (the MLS sync orchestrator: bootstrap, bounded Adds, Remove decisions), `payload.ts` (the strict envelope shape), `gif.ts` (server-side provider proxy). |
+| `lib/crypto/` | Device-side cryptography: `mls.ts` (the `ts-mls` wrapper — group state, commits, welcomes, epoch rules, local-state teardown), `attachment.ts` (AES-256-GCM envelope helpers), `storage.ts` (IndexedDB stores for MLS group state and the own-message plaintext cache). `ts-mls` is **not independently audited**. |
+| `hooks/` | Client data loops shared by community components (`use-community-workspace`: sync loop, optimistic send, realtime merge, decryption states). |
 | `lib/api/responses.ts` | The one error envelope: `{ error: { code, message, issues? } }`. |
 | `lib/supabase/` | `proxy.ts` (session refresh + page redirects), `server.ts` (cookie-scoped server client), `client.ts` (browser client). No service-role key exists in the repo. |
-| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0013` and `0018`–`0024` are append-only (`0014`–`0017` never existed); existing files are never edited. |
+| `supabase/migrations/` | The schema, applied only to the local stack (`npx supabase db reset`). `0001`–`0013` and `0018`–`0025` are append-only (`0014`–`0017` never existed); existing files are never edited. |
 | `tests/unit` | Vitest, no network: validators, queries against fake builders, every route's status matrix, component behaviour. |
 | `tests/integration` | Vitest against the real local stack with real auth users: RLS/grant probes, RPC races, HTTP-level handler tests. Never uses a service-role key (SQL fixtures go through `docker exec psql`). |
 | `tests/e2e` | Playwright + Chromium driving the real `next dev` app: two-browser flows, WebSocket frame capture/replay, teardown scoped to a per-run user id. |
@@ -53,7 +62,7 @@ Two rules define the codebase:
 
 ## Data model
 
-Twenty-four tables, all with RLS enabled, all granted explicitly column by
+Thirty-two tables, all with RLS enabled, all granted explicitly column by
 column (`auto_expose_new_tables = false`):
 
 | Table | Owns |
@@ -81,6 +90,14 @@ column (`auto_expose_new_tables = false`):
 | `flashcard_reviews` | The SM-2-lite review schedule (`0019`), one row per (user, card). |
 | `study_plans` / `plan_items` | Generated study plans (`0020`); one-active and one-generating partial unique indexes, state machine through SECURITY DEFINER RPCs. |
 | `ai_usage` | Per-user daily AI token/step accounting (`0018`/`0019`) enforcing the chat quota. |
+| `communities` | One discoverable group (`0025`): slug, name, category, visibility, join policy, `member_count ≥ 1`, the `private → request` pairing CHECK; four policies (public-or-member read, owner-self insert, staff update, owner delete). |
+| `community_members` | Membership `(community_id, user_id)` with `role ∈ owner/moderator/member`, `status ∈ active/requested/banned` and a partial unique one-owner index. **`SELECT`-alone grants** — create/join/leave/set/kick are SECURITY DEFINER RPCs, so self-promotion and `member_count` drift are structurally unreachable. |
+| `community_channels` | Channels per community (slug unique per community, server-booked `position`) — each channel is one MLS group. |
+| `community_messages` | The encrypted stream: `kind ∈ application/commit`, base64 `ciphertext` (16–262 144), sender device id, idempotent `unique (channel_id, client_msg_id)`, identity `seq` cursor; append-only, published to Realtime as ciphertext rows. |
+| `community_welcomes` | Addressed MLS welcomes carrying ciphertext + the public ratchet tree (RFC 9420 out-of-band distribution); `SELECT` is recipient-or-sender only. |
+| `community_devices` | Published MLS key packages (public credential material by design), `unique (user_id, device_id)`, world-readable `SELECT` so peers can run Add commits, writes own-row only. |
+| `community_attachments` | Metadata pointers for ciphertext objects in the private `community-attachments` bucket — path (uuids only), size and type; never a file name or plaintext. |
+| `community_reports` | Voluntary reports with a nullable ≤2 000-char **decrypted** excerpt — the one deliberate plaintext escape hatch, opt-in per report; no status machine. |
 
 Membership flows (join, leave, invitation acceptance) all funnel through
 `SECURITY DEFINER` RPCs because an RLS `WITH CHECK` cannot take the row lock
@@ -110,6 +127,24 @@ route handler → session claims → Zod (400) → lib/ query →
   RPC or RLS-filtered write → shaped response / mapped error code
 ```
 
+**A message send (community, end-to-end encrypted):**
+
+```
+device encrypts first — MLS application message (ts-mls) for text/sticker/
+  reactions/commits; AES-256-GCM envelope (key inside the E2EE payload) for
+  files and GIFs
+POST /api/communities/[id]/channels/[channelId]/messages
+  → session claims → strict Zod (kind, base64 ceiling, uuid, device id) →
+  30/60 s window → membership + channel-in-community re-check (404 parity) →
+  INSERT { kind, ciphertext, client_msg_id, seq }     ← plaintext never exists server-side
+  → 201 { message } (a repeated clientMsgId returns the existing row)
+  → realtime INSERT frame (the ciphertext row) filtered by RLS; receivers
+    decrypt on-device or render the honest "can't be decrypted on this
+    device yet" state — and the sender's own copy is served from this
+    device's local plaintext cache (MLS senders cannot re-decrypt their
+    own envelopes; see docs/SECURITY.md §Communities)
+```
+
 There is no third path: pages never write, components never call Postgres
 directly, and every failure travels through the single envelope.
 
@@ -133,14 +168,15 @@ hidden link.
 
 ## Realtime
 
-Four kinds of channels, all gated to current room members or the user
-themselves:
+Five kinds of channels, all gated to current room members, current
+community members, or the user themselves:
 
 | Channel | Carries | Gate |
 | --- | --- | --- |
 | `focus-{roomId}` | `postgres_changes` on `focus_sessions` (`wait: true` so `SUBSCRIBED` implies the filter is registered) | RLS applied at delivery |
 | `room-messages-{roomId}` | `postgres_changes` on `room_messages` | RLS applied at delivery |
 | `room-presence-{roomId}` | Presence `{ alias, studying }` | `realtime.messages` policies from `0006`: topic uuid must match a current `room_members` row |
+| `community-messages-{channelId}` | `postgres_changes` INSERT on `community_messages` (`0025` publication) | `messages_select_member` RLS at delivery — frames are ciphertext rows plus metadata, never plaintext |
 | user-scoped notification channel | `postgres_changes` INSERT on `notifications` (`0012` publication) feeding the header bell badge | own-row RLS at delivery; a focus/60 s polling fallback covers missed frames |
 
 Nothing realtime persists: presence lives in Realtime's memory, chat and
@@ -179,11 +215,18 @@ workspace, and the invitee's inbox at `/invitations` (nav-linked). There is
 no public invite URL — invitations are addressed to an alias and only the
 addressee can see or act on them.
 
+Communities surface as `/communities` (discovery + create dialog) and the
+per-community workspace (`/communities/[id]`): a channel sidebar, the
+message list with per-message decryption states, and a composer with
+text/sticker/GIF/file modes — all driven by `hooks/use-community-workspace.ts`
+and the shared report dialog for moderation, with the honest waiting and
+"can't decrypt yet" states rendered instead of fake plaintext.
+
 ## Testing architecture
 
 | Suite | Runs against | Proves |
 | --- | --- | --- |
-| Unit (`npm test`) | Nothing (fakes) | Validation, shaping, error-code maps, component behaviour — fast enough to run per file in parallel workers. `npm run test:coverage` measures `lib/**` + `app/api/**` and enforces the floors (statements 74% / branches 64%). |
+| Unit (`npm test`) | Nothing (fakes) | Validation, shaping, error-code maps, component behaviour — fast enough to run per file in parallel workers. `npm run test:coverage` measures `lib/**` + `app/api/**` and enforces the floors (statements 75% / branches 65%, per `vitest.config.ts`). |
 | Integration (`npm run test:integration`) | The real local stack, real signups, `docker exec psql` for fixtures | RLS/grant/policy freezes, RPC races (concurrent joins, accepts, starts), HTTP-level status matrices — serialized per file so row counts are stable. |
 | E2E (`npm run test:e2e`) | `next dev` + the local stack, Chromium | Whole product flows through real forms; realtime proven by capturing and replaying WebSocket frames rather than sleeping. The responsive/a11y spec drives axe scans (WCAG 2.1 A/AA) over the public, auth, discovery, settings and workspace surfaces. |
 
@@ -212,6 +255,7 @@ the code reads a key it does not document. The short version:
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The local or hosted project; the publishable key only — no service-role key exists anywhere in the repo. |
 | `AI_PROVIDER`, `AI_API_KEY`, `AI_BASE_URL` | Server-side AI credentials; `mock` (or a missing key) runs the demo-mode pipeline with canned answers. |
 | `AI_*` model/limit keys | Optional overrides read server-side only (see `.env.example` for the exact names). |
+| `GIF_PROVIDER` / `GIF_API_KEY` | Server-side GIF provider for the community composer (`tenor` or `giphy`, both required together). Never `NEXT_PUBLIC_*`; with either empty the tab hides and the proxies answer `503 gif_unavailable`. |
 
 ## Where decisions live
 

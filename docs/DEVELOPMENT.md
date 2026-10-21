@@ -117,6 +117,42 @@ environment variables referenced from `supabase/config.toml`.
 Hosted and local are independent: enabling a provider on the dashboard
 does not enable it in the local stack, and vice versa.
 
+## GIF search (communities)
+
+The community composer has a GIF tab. Like the AI key and the LiveKit
+secrets, the provider credential is **server-side only**:
+
+- Two keys, read together in `lib/communities/gif.ts`: `GIF_PROVIDER`
+  (`tenor` or `giphy`) and `GIF_API_KEY`. Both are required together; neither
+  is ever `NEXT_PUBLIC_*`. The browser only ever talks to
+  `GET /api/communities/gif/search` and `POST /api/communities/gif/fetch` —
+  the provider sees this server's request, never the student's session.
+- **No provider configured → the feature is honestly off**: the composer
+  hides the GIF tab, and both endpoints answer `503 gif_unavailable` (the
+  rate-limit window is spent before the config check, as documented in
+  `docs/API_CONTRACTS.md`). `npm run check:env` covers both keys through
+  `.env.example`.
+- Local development: create a free Tenor (Google Cloud) or Giphy
+  (developers.giphy.com) key and put both lines in `.env.local`:
+
+  ```bash
+  GIF_PROVIDER=tenor
+  GIF_API_KEY=…
+  ```
+
+  then restart `npm run dev`. Downloads are proxied with a host allow-list
+  and a 5 MiB `image/gif`-only cap (see `docs/API_CONTRACTS.md` §gif), and
+  fetched GIFs are encrypted like any attachment before they are announced in
+  chat — the bucket only ever receives ciphertext.
+- The test suites never need a provider key: the GIF unit tests stub the
+  provider, and everything else exercises the unconfigured `503` path.
+
+Code map: `lib/communities/gif.ts` (config, search, allow-listed fetch) ·
+`app/api/communities/gif/{search,fetch}/route.ts` (session, rate limit,
+envelope) · `components/communities/community-composer.tsx` (the tab and its
+hidden-when-unavailable behaviour) · `hooks/use-community-workspace.ts`
+(encrypts the chosen GIF into an attachment payload before send).
+
 ## Running the suites
 
 | Suite | Command | Needs | Notes |
@@ -124,7 +160,7 @@ does not enable it in the local stack, and vice versa.
 | Lint | `npm run lint` | — | Zero errors, zero warnings. Baseline suppressions are listed in `AGENTS.md`; do not add more. |
 | Types | `npx tsc --noEmit` | — | |
 | Unit | `npm test` | — | vitest, node environment; DOM component tests included via jsdom-style rendering. |
-| Unit + coverage | `npm run test:coverage` | — | Measures `lib/**` + `app/api/**` only; floors are statements 74% / branches 64%. |
+| Unit + coverage | `npm run test:coverage` | — | Measures `lib/**` + `app/api/**` only; floors are statements 75% / branches 65% (`vitest.config.ts`). |
 | Integration | `npm run test:integration` | local stack running + `db reset` | Real auth users over HTTP and SQL. No DOM assertions. |
 | E2E | `npm run test:e2e` | local stack running + `db reset` | Playwright Chromium; the dev server is started by the Playwright config. |
 | Build | `npm run build` | — | Must pass without any Supabase reachable. |

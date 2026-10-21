@@ -14,7 +14,10 @@ type RoomViewProps = {
 };
 
 const { MeetingRoomView } = vi.hoisted(() => ({
-  MeetingRoomView: vi.fn((props: RoomViewProps) => null),
+  MeetingRoomView: vi.fn((props: RoomViewProps) => {
+    void props;
+    return null;
+  }),
 }));
 
 vi.mock("@/components/meeting/meeting-room-view", () => ({

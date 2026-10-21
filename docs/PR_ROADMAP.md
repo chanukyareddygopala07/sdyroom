@@ -5,11 +5,16 @@ pull requests that finishes the product. Every PR below has a PR-ready
 implementation specification in [`docs/prs/`](prs/).
 
 > **These are specifications, not GitHub pull requests.** Most entries in
-> `docs/prs/` exist only as a spec. As of this writing GitHub shows **14 PRs
-> merged (01–14), 1 open** — [PR #15](https://github.com/chanukyareddygopala07/sdyroom/pull/15),
-> the implementation of spec PR 11 (notifications) on `feat/notifications`
-> (`684a7bf`). A spec becomes a PR only when a developer creates a branch and
-> opens one.
+> `docs/prs/` exist only as a spec. As of this writing GitHub shows **36 PRs
+> merged (#1–#15, #17–#37), 2 open** —
+> [PR #16](https://github.com/chanukyareddygopala07/sdyroom/pull/16)
+> ("docs: update completed and pending roadmap status", an older
+> `feat/notifications` branch) and
+> [PR #38](https://github.com/chanukyareddygopala07/sdyroom/pull/38),
+> the spec-less **communities** feature on `feat/communities-e2ee`. A spec
+> becomes a PR only when a developer creates a branch and opens one; the
+> communities PR is the one shipped feature with no `docs/prs/` spec at all
+> and is recorded in §3.
 
 ---
 
@@ -80,9 +85,11 @@ first place a secret enters the project.
 
 ## 3. PR inventory
 
-11 remaining PRs: 8 of the 13 requested (11–18 — 06, 07, 08, 09 and 10 have
-merged) plus 3 discovered during the audit (19–21). Each has a spec in
-`docs/prs/`.
+All spec PRs (06–21) are merged — the "In review" state of spec PR 21 below
+has since become [PR #26](https://github.com/chanukyareddygopala07/sdyroom/pull/26)
+merged. What remains open on GitHub is PR #16 (see the note above) plus the
+one feature PR opened without a spec: **22 — communities**, below. Each spec
+PR has a spec in `docs/prs/`.
 
 | PR | Feature | Spec | Owner | Depends on | Migration | Complexity | Status |
 | -- | --- | --- | --- | --- | --- | -- | --- |
@@ -101,11 +108,14 @@ merged) plus 3 discovered during the audit (19–21). Each has a spec in
 | 18 | Production security & reliability hardening | [`PR-18`](prs/PR-18-production-hardening.md) | B | 10, 19, 21 + core | none (spec's `0017` was stale) | XL | Merged — [PR #24](https://github.com/chanukyareddygopala07/sdyroom/pull/24) (`ea56594`) |
 | 19 | Responsive shell, mobile nav & accessibility baseline | [`PR-19`](prs/PR-19-responsive-shell-a11y.md) | A | none | none | Medium | Merged — [PR #13](https://github.com/chanukyareddygopala07/sdyroom/pull/13) (`b3acb0f`) |
 | 20 | Profile & settings (alias editing) | [`PR-20`](prs/PR-20-profile-settings.md) | B | none | `0023` (language column; spec's `0017` was stale) | Small | Merged — [PR #25](https://github.com/chanukyareddygopala07/sdyroom/pull/25) (`0091113`) |
-| 21 | Quality & coverage baseline | [`PR-21`](prs/PR-21-quality-coverage-baseline.md) | B | none | none | Medium | In review — [PR #26](https://github.com/chanukyareddygopala07/sdyroom/pull/26) (`240c928`) |
+| 21 | Quality & coverage baseline | [`PR-21`](prs/PR-21-quality-coverage-baseline.md) | B | none | none | Medium | Merged — [PR #26](https://github.com/chanukyareddygopala07/sdyroom/pull/26) (`240c928`) |
+| 22 | Communities: discovery, public/private groups, end-to-end encrypted MLS channels, moderation & attachments | — (spec-less; built to `AGENTS.md` and this roadmap's conventions) | A (OpenCode) | merged main | `0025` | Large | Open — [PR #38](https://github.com/chanukyareddygopala07/sdyroom/pull/38) on `feat/communities-e2ee` |
 
 **Numbering note.** 06–18 follow the numbering requested in the brief; 19–21 are
-the PRs discovered by the audit. Numbers are an ordering *label*, not an order —
-the dependency graph below governs the real sequence.
+the PRs discovered by the audit; 22 is the spec-less communities PR — its number
+is a label with no `docs/prs/` spec, no node in the dependency graph, and no
+inter-PR dependency beyond merged `main`. Numbers are an ordering *label*, not
+an order — the dependency graph below governs the real sequence.
 
 **Migration-number rule.** Every migration number above is pre-assigned to exactly
 one PR, so two developers can never write the same migration file. A migration
@@ -234,8 +244,10 @@ table over the headcount.
 ## 7. Recommended order and the top 3 to start now
 
 > Historical: this recommendation was written before the PR 06–20 merges.
-> The Status column of the table in §2 is the authoritative state; only
-> PR 21 remains open.
+> The authoritative open-PR state is the intro above and the Status column
+> of §3: every spec PR (06–21) is merged; the two open GitHub PRs are
+> #16 (`feat/notifications`, docs status) and #38 (communities,
+> `feat/communities-e2ee`).
 
 **Start now:**
 
@@ -272,7 +284,7 @@ start.
 
 | Question | Answer |
 | --- | --- |
-| **How many PRs remain?** | **11** (11–21): 11 pending. |
+| **How many PRs remain?** | **2 open, both recorded above**: [PR #16](https://github.com/chanukyareddygopala07/sdyroom/pull/16) (docs status, `feat/notifications`) and [PR #38](https://github.com/chanukyareddygopala07/sdyroom/pull/38) (communities, `feat/communities-e2ee`, unmerged by design until reviewed). Every spec PR 01–21 is merged. |
 | **Which can run in parallel?** | 19, 20, 21 (all three, any order); 11 follows once 19 + 20 land; 17 runs alongside 11 (06 already merged). |
 | **Which block AI?** | **12** is the gate for everything AI. 13/14/16/15 sit behind it in order. Nothing in the Collaboration lane blocks AI — the AI track only needs merged `main` (PR 05) plus, for the planner, 14 and 16. |
 | **Which block public launch?** | **18** (headers/CSP, monitoring, backups, load tests, a11y), **19** (mobile + a11y), **21** (coverage gate). 10 (rate limiting + orphan cleanup) and 09 (moderation) have landed, so the launch blockers are the PR 18 cluster plus the foundations; 06/07/08/11 are product-complete-ness, not launch-safety; 12–17 are post-launch-eligible. |

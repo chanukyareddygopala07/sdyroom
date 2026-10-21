@@ -1,0 +1,45 @@
+{
+  "pack": "sdyroom-basic",
+  "stickers": [
+    {
+      "id": "coffee",
+      "alt": "A warm cup of coffee",
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\"><path d=\"M14 26h30v14a12 12 0 0 1-12 12H26a12 12 0 0 1-12-12V26Z\" stroke=\"currentColor\" stroke-width=\"3\"/><path d=\"M44 30h5a6 6 0 1 1 0 12h-5\" stroke=\"currentColor\" stroke-width=\"3\"/><path d=\"M24 10c0 4-4 4-4 8m12-8c0 4-4 4-4 8\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\"/></svg>"
+    },
+    {
+      "id": "books",
+      "alt": "A stack of study books",
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\"><path d=\"M12 50V16a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v34\" stroke=\"currentColor\" stroke-width=\"3\"/><path d=\"M30 50V18a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v32\" stroke=\"currentColor\" stroke-width=\"3\"/><path d=\"M8 50h48\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\"/></svg>"
+    },
+    {
+      "id": "rocket",
+      "alt": "A rocket taking off",
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\"><path d=\"M32 8c8 6 12 16 12 26l-6 8H26l-6-8c0-10 4-20 12-26Z\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linejoin=\"round\"/><circle cx=\"32\" cy=\"28\" r=\"5\" stroke=\"currentColor\" stroke-width=\"3\"/><path d=\"M26 44l-6 10 10-4m4-6 6 10-10-4\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linejoin=\"round\"/></svg>"
+    },
+    {
+      "id": "brain",
+      "alt": "A brain, for big study energy",
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\"><path d=\"M28 12a8 8 0 0 0-8 8 8 8 0 0 0-4 14 8 8 0 0 0 4 14 8 8 0 0 0 8 4V12Z\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linejoin=\"round\"/><path d=\"M36 12a8 8 0 0 1 8 8 8 8 0 0 1 4 14 8 8 0 0 1-4 14 8 8 0 0 1-8 4V12Z\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linejoin=\"round\"/><path d=\"M32 12v40\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\"/></svg>"
+    },
+    {
+      "id": "checkmark",
+      "alt": "A big done-for-the-day checkmark",
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\"><circle cx=\"32\" cy=\"32\" r=\"22\" stroke=\"currentColor\" stroke-width=\"3\"/><path d=\"M22 33l7 7 14-16\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>"
+    },
+    {
+      "id": "palette",
+      "alt": "An artist palette",
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\"><path d=\"M32 10c12 0 22 9 22 20 0 6-5 8-9 8h-4a5 5 0 0 0-3 9c1 2 0 5-3 5-11 0-25-8-25-22s12-20 22-20Z\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linejoin=\"round\"/><circle cx=\"24\" cy=\"26\" r=\"3\" fill=\"currentColor\"/><circle cx=\"36\" cy=\"22\" r=\"3\" fill=\"currentColor\"/><circle cx=\"44\" cy=\"30\" r=\"3\" fill=\"currentColor\"/><circle cx=\"22\" cy=\"38\" r=\"3\" fill=\"currentColor\"/></svg>"
+    },
+    {
+      "id": "music-note",
+      "alt": "A music note",
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\"><path d=\"M26 46V20l24-6v26\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linejoin=\"round\"/><ellipse cx=\"20\" cy=\"46\" rx=\"7\" ry=\"5\" stroke=\"currentColor\" stroke-width=\"3\"/><ellipse cx=\"44\" cy=\"40\" rx=\"7\" ry=\"5\" stroke=\"currentColor\" stroke-width=\"3\"/></svg>"
+    },
+    {
+      "id": "party",
+      "alt": "A party popper celebrating a win",
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" fill=\"none\"><path d=\"M12 52 26 18l20 20L12 52Z\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linejoin=\"round\"/><path d=\"M34 16c2-3 6-3 8 0m4 6c2-3 6-3 8 0M40 8v4m12 6v4\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\"/><circle cx=\"26\" cy=\"38\" r=\"2.5\" fill=\"currentColor\"/><circle cx=\"34\" cy=\"32\" r=\"2.5\" fill=\"currentColor\"/><circle cx=\"30\" cy=\"44\" r=\"2.5\" fill=\"currentColor\"/></svg>"
+    }
+  ]
+}
