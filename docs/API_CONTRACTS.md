@@ -1665,3 +1665,627 @@ the caller sent one — the `x-request-id` echoed back.
 | Global `/moderation` dashboard | **Not built.** Reports are room-scoped and authorization is per-room; the moderation inbox mounted in the room workspace is the product contract (PR 09's reconciliation). |
 | Message removal / soft-hide | **Never in v1.** `room_messages` keeps no `UPDATE`/`DELETE` grant and no hidden columns — moderators act at the member level (mute/remove) and reports carry the context. |
 | AI summaries | Explicitly out of scope for this milestone. |
+
+---
+
+## Communities and encrypted channels
+
+Communities are the end-to-end-encrypted counterpart of study rooms: a named,
+discoverable group with member-visible channels whose messages, welcomes,
+attachments and GIFs are MLS (RFC 9420) ciphertext produced on the sender's
+device — **one MLS group per channel**. The server holds no plaintext, no
+message keys and no private keys (no column could hold one); it validates
+envelope *structure* — base64, size ceiling, kind allow-list, idempotency key,
+membership — books membership and ordering, and signs downloads. The metadata
+it necessarily sees is documented in the `0025_communities_e2ee.sql` header:
+community name/description/category/visibility, membership and roles, channel
+names, envelope existence, sender user and device ids, timestamps, sequence
+numbers, ciphertext sizes and attachment storage references — and no stored
+row holds message bodies, GIF payloads, attachment plaintext or key material
+beyond published key packages (the GIF proxy does stream response bytes
+transiently through this server; see `GET gif/search` / `POST gif/fetch`
+below).
+
+Two of this document's opening rules need explicit carve-outs here, because
+MLS addressing is per-user by nature. Ids appear where the protocol demands
+them: the roster and sync return `user_id`s, messages carry
+`sender_id`/`sender_device_id`, welcomes carry `recipient_user_id` and
+`recipientDeviceId`, device rows key on `user_id`, `POST …/devices/fetch` takes
+a `userIds` array, and the attachment register takes the `storagePath` the
+client just uploaded to (format-checked, then re-derived from this community
+and channel before it is stored). The `201` attachment row echoes
+`storage_path` back to its own uploader only; no read route returns a path.
+Everything else follows the contract above: no owner id from any body, no
+contact data, no email anywhere — a `requested` join, its approval and every
+welcome are read back through the routes below.
+
+Roles are `owner` | `moderator` | `member` over status `active` | `requested` |
+`banned`. Every membership write runs through one of six SECURITY DEFINER RPCs
+(`create_community`, `join_community`, `leave_community`,
+`set_community_member`, `kick_community_member`, `community_roster`) —
+`community_members` carries a `SELECT` grant alone, so there is no
+self-promotion, self-unban or direct `member_count` edit over PostgREST. Two
+gates produce nearly every refusal: the membership/visibility gate answers
+`404 not_found` for missing, private-denied, `requested` and `banned` callers
+alike (the shared "does not exist / may not see" convention), while the staff
+gate answers `403 forbidden` only after membership is proven and the caller is
+acting above their role.
+
+The `/communities` pages export `instant = false` like every session-gated
+page; `/communities/[id]` gates the session in its server file and renders
+`CommunityDetailView`, whose body fetches through the signed-in client.
+`community_messages` rides the `supabase_realtime` publication, so
+`postgres_changes` INSERT frames — the stored row, ciphertext included — are
+filtered per subscriber by `messages_select_member` exactly as room messages
+are.
+
+| Method | Path | Summary |
+| --- | --- | --- |
+| `GET` | `/api/communities?q=&category=&limit=` | Discovery page over **public** communities only |
+| `POST` | `/api/communities` | `create_community` RPC: community + owner row + `general` channel |
+| `GET`/`PATCH`/`DELETE` | `/api/communities/[id]` | Detail + caller's membership / staff edit / owner delete |
+| `POST` | `/api/communities/[id]/join` · `/leave` | Join (or file a request) / leave |
+| `GET`/`POST` | `/api/communities/[id]/channels` | Channel list (members) / create (staff) |
+| `GET`/`POST` | `…/channels/[channelId]/messages` | Ciphertext page / one envelope |
+| `POST` | `…/channels/[channelId]/welcomes` | One addressed welcome + ratchet-tree snapshot |
+| `GET` | `/api/communities/[id]/welcomes` | The caller's pending welcomes |
+| `GET` | `/api/communities/[id]/sync` | Active member ids + key packages |
+| `GET` | `/api/communities/[id]/members` | Roster (+ `include_requested` for staff) |
+| `PATCH`/`DELETE` | `/api/communities/[id]/members/[userId]` | Approve / ban / role / kick (or self-leave) |
+| `POST` | `/api/communities/[id]/reports` | File a report (voluntary decrypted excerpt) |
+| `POST` | `/api/communities/[id]/attachments` | Register a ciphertext upload |
+| `GET` | `/api/communities/[id]/attachments/[attachmentId]` | Signed URL (120 s) |
+| `POST` | `/api/communities/devices` · `/devices/fetch` | Publish this device's key package / fetch others' |
+| `GET`/`POST` | `/api/communities/gif/search` · `/gif/fetch` | Server-side GIF search and download proxies |
+
+### Community shape
+
+```json
+{
+  "id": "9c1f0c3e-2b41-4a0e-9a77-5c6e0f1d2a3b",
+  "slug": "neet-biology-2027",
+  "name": "NEET Biology 2027",
+  "description": "Daily MCQ drills, no answer leaks.",
+  "category": "study",
+  "visibility": "public",
+  "join_policy": "open",
+  "rules": "Search before you ask.",
+  "owner_id": "4f2c9a11-7d3e-4f6b-8c2a-1e9b0d5f7a44",
+  "member_count": 12,
+  "created_at": "2026-10-21T09:14:02.551+00:00",
+  "updated_at": "2026-10-21T09:14:02.551+00:00"
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `id` | Server-minted uuid; never accepted from any body. |
+| `slug` | 4–40 chars, `^[a-z0-9][a-z0-9-]{2,38}[a-z0-9]$`, unique — a taken slug is `409 slug_taken` on create. |
+| `name` | 3–60 chars, trimmed. |
+| `description` | ≤1000 chars, default `""`. |
+| `category` | `study` \| `exams` \| `subjects` \| `projects` \| `campus` \| `other`, default `study`. |
+| `visibility` | `public` \| `private`, default `public`. |
+| `join_policy` | `open` \| `request`, default `open`. `private` forces `request` (schema refine, table CHECK and RPC agree), and demoting to `private` flips an existing `open` policy server-side. |
+| `rules` | ≤2000 chars, default `""`. |
+| `owner_id` | Pinned to `auth.uid()` inside `create_community`; `.strict()` bodies carrying it are `400 validation` naming the key, and the update policy re-pins it — ownership cannot transfer through `PATCH`. |
+| `member_count` | Starts at 1 (the creator). +1 on the open-join path and when a `requested` row is approved; −1 (floored at 1) when an active member leaves, is kicked or is banned — always in the same transaction as the row change. |
+| `created_at`, `updated_at` | Server clocks; `updated_at` moves on patch and on count changes. |
+
+### `GET /api/communities` · `POST /api/communities`
+
+**`GET`** — discovery over **public** rows only: the query hard-codes
+`visibility = 'public'` (private rows never appear, mirroring
+`list_public_rooms`), with RLS narrowing again behind it. Filters: `q`
+(≤60 chars, case-insensitive over name and description), `category`, `limit`
+1–50 (default 20). `has_more` comes from fetching limit+1 — and unlike room
+discovery there is **no `cursor`**: one page, newest-created first, no second
+page to request. Signed-in only; reads are unthrottled.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `communities` | `{ "communities": [...], "has_more": bool }` — one page of public rows |
+| 400 | `validation` | unknown `category`, `q` over 60 chars, `limit` outside 1–50 |
+| 401 | `unauthenticated` | no session |
+| 500 | `communities_failed` | the query failed |
+
+**`POST`** — strict body `{ slug, name, description?, category?, visibility?,
+joinPolicy?, rules? }`; unknown keys are `400 validation` **naming the key**
+(that is how a smuggled `owner_id` dies) and the `private` + `open` pairing is
+refused at the schema. Order: `401` → `400 invalid_json` → `400 validation` →
+`429` (window taken after the body validates, before the write) →
+`create_community`, which in one transaction inserts the community
+(`member_count = 1`), the caller's owner row and the default `general` channel
+at position 0.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 201 | `community` | created row; owner member row + `general` channel minted inside the same RPC |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key (named), field limits, `private` + `open` |
+| 401 | `unauthenticated` | no session |
+| 409 | `slug_taken` | slug already exists (unique index, mapped from the RPC's duplicate-key error) |
+| 429 | `rate_limited` | 5 creates per 60 s per user — `Retry-After: 60` |
+| 500 | `community_create_failed` | the RPC failed |
+
+### `GET` / `PATCH` / `DELETE /api/communities/[id]`
+
+**`GET`** — the visibility gate runs first: a public row is readable by any
+signed-in user (discovery preview); a private row needs an active membership
+and otherwise answers the same `404` as a missing id. The envelope is
+`{ "community", "membership", "visibility" }` — `membership` is the caller's
+own row (`{ role, status, joined_at }`, including `requested`/`banned` states
+on a public row) or `null`, and `visibility` repeats the gate's own answer.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `community` | `{ "community": {...}, "membership": {...} \| null, "visibility": "public" \| "private" }` |
+| 400 | `validation` | id is not a UUID |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | missing id, or a private row without active membership — byte-identical answers |
+| 500 | `community_failed` | the lookup failed |
+
+**`PATCH`** — staff only. Strict body over `{ name, description, category,
+visibility, joinPolicy, rules }`; there is **no `slug` field**, so the
+documented `409 slug_taken` cannot currently be provoked through this route
+(`updateCommunity` maps a duplicate-key failure to it if a future field ever
+exposes one). Absent `name`, `category`, `visibility` and `joinPolicy` keep
+their current values, but `description` and `rules` are Zod-defaulted to `""`,
+so **omitting them clears those two fields** — send them back unchanged to
+preserve them (unit-pinned). `private` + `open` is `400` at the schema, and
+demoting `visibility` to `private` flips an `open` policy to `request`
+server-side (the route re-reads the row to decide).
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `community` | the updated row |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, field limits, `private` + `open` |
+| 401 | `unauthenticated` | no session |
+| 403 | `forbidden` | a member who is not staff editing |
+| 404 | `not_found` | non-member or missing community |
+| 409 | `slug_taken` | duplicate slug — mapped, but unreachable while the schema accepts no `slug` |
+| 500 | `community_update_failed` | the update failed |
+
+**`DELETE`** — membership first, so a **non-member** gets `404`, never a role
+error. PostgREST answers a policy-filtered `DELETE` with success
+over zero rows, so the route reads the outcome back with `.select("id")`:
+zero rows + non-owner role → `403 forbidden`; zero rows as the owner → the row
+vanished between the gate and the delete → `500` (fail honestly rather than
+return a false `204`). Everything under the community cascades: members,
+channels (messages and welcomes with them), attachments and reports. Device
+rows are account-level (`user_id`/`device_id`, no community id) and survive.
+Storage objects are deliberately not swept — with every membership row gone
+the bucket's select policy answers nobody, so leftover ciphertext is
+unreachable rather than advertised.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 204 | (empty) | the owner deleted the community and everything under it |
+| 400 | `validation` | id is not a UUID |
+| 401 | `unauthenticated` | no session |
+| 403 | `forbidden` | member who is not the owner |
+| 404 | `not_found` | non-member or missing community (the membership gate runs first) |
+| 500 | `community_delete_failed` | the delete failed, or the owner's delete removed no row |
+
+### `POST …/join` · `POST …/leave`
+
+**`POST …/join`** — bodyless. Order: `401` → `400` (id) → `429` →
+`join_community`, which pins `auth.uid()` and decides: missing community →
+`404`; banned → `403 forbidden`; already `active` → `200 "active"`
+(idempotent, count untouched); already `requested` → `200 "requested"`;
+**private or request-policy** → a `requested` row is filed →
+`200 "requested"`; otherwise active row + `member_count + 1` →
+`200 "active"`. Join answers `404` only for an id that does not exist — an
+existing private community answers `200 requested`, the one place this
+document's "no existence oracle" rule yields to request-based joining (a
+request has to be fileable against an id the caller cannot read). The next
+client step after `"active"` is the MLS sync: an existing member's client Adds
+the joiner's devices on its next visit and posts the welcomes.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `status` | `{ "status": "active" \| "requested" }` — open join, request filed, or idempotent repeat |
+| 400 | `validation` | id is not a UUID |
+| 401 | `unauthenticated` | no session |
+| 403 | `forbidden` | banned from this community |
+| 404 | `not_found` | no such community |
+| 429 | `rate_limited` | 30 per 3600 s per (community, caller) — `Retry-After: 3600` |
+| 500 | `community_join_failed` | the RPC failed |
+
+**`POST …/leave`** — bodyless, unthrottled. `leave_community` answers `404`
+for an unknown id **and** for a caller with no row (same `404`), refuses the
+owner with `409 owner_cannot_leave` (transfer or delete first), deletes the
+row, and decrements `member_count` only when the departing member was
+`active` (floored at 1). This is also the RPC `DELETE …/members/[userId]`
+runs when the target is the caller. Cryptographic exit is the client's job,
+and it is a wipe, not a commit: `ts-mls` forbids a member from committing its
+own removal, so the leaving device deletes its local group state and its
+own-message cache (`removeCommunityLocalState`) while the API/RLS revoke row
+access immediately — the epoch-advancing `Remove` commit is produced by a
+*remaining* member's client on its next sync, exactly as for a ban (below).
+The server holds no keys and runs no crypto on anyone's behalf.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 204 | (empty) | the membership row is gone |
+| 400 | `validation` | id is not a UUID |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | missing community or no membership row |
+| 409 | `owner_cannot_leave` | the owner must transfer ownership or delete first |
+| 500 | `community_leave_failed` | the RPC failed |
+
+### `GET` / `POST …/channels`
+
+**`GET`** — members only (non-member, banned and missing share the `404`),
+≤200 rows ordered by `position` then `created_at` — the sidebar's order.
+Unthrottled.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `channels` | `{ "channels": [...] }`, ≤200, sidebar order |
+| 400 | `validation` | id is not a UUID |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | non-member, banned, or missing community |
+| 500 | `channels_failed` | the query failed |
+
+**`POST`** — staff only. Strict body `{ name (1–40), slug (1–40 — `general` or
+kebab, `^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$`), description (≤200, default "") }`.
+The window is taken after the body validates but **before** the staff gate;
+then a per-community slug pre-check answers `409 channel_exists` (the unique
+index `(community_id, slug)` is the backstop), `position` is booked
+server-side as `max(position) + 1`, and the row is inserted. The MLS group for
+the channel is created by the first member client that opens it — the server
+only books the row.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 201 | `channel` | `{ "channel": {...} }` with its server-booked `position` |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, name/slug/description limits |
+| 401 | `unauthenticated` | no session |
+| 403 | `forbidden` | a plain member (the window was already spent — the slot is taken before the gate) |
+| 404 | `not_found` | non-member or missing community |
+| 409 | `channel_exists` | that slug already exists in this community |
+| 429 | `rate_limited` | 10 per 3600 s per (community, staff) — `Retry-After: 3600` |
+| 500 | `channel_create_failed` | the insert failed |
+
+### `GET` / `POST …/channels/[channelId]/messages`
+
+**`GET`** — `before` is a `seq` cursor (`seq < before`, ≥1), `limit` 1–100
+default 50; newest first, `has_more` from limit+1. Rows are the stored
+envelopes — `id, community_id, channel_id, sender_id, sender_device_id, kind,
+ciphertext, client_msg_id, seq, created_at` — opaque; the client decrypts
+after fetch. Membership gate plus a channel-belongs-to-community check (both
+`404`). Unthrottled.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `messages` | `{ "messages": [...], "has_more": bool }` — one page, newest first |
+| 400 | `validation` | id not a UUID, `before` under 1, `limit` outside 1–100 |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | no active membership, or the channel is not in this community |
+| 500 | `messages_failed` | the query failed |
+
+**`POST`** — strict body `{ kind: "application" | "commit", ciphertext
+(base64, 16–262144), clientMsgId (uuid), senderDeviceId (8–64) }` — the kind
+allow-list keeps the stream to protocol messages; welcomes carry an addressee
+and go to `…/welcomes` instead. Structure is all the server checks — it cannot
+read plaintext. Order: `401` → `400` ids → `400 invalid_json` →
+`400 validation` → `429` → membership → channel → insert. `clientMsgId`
+dedupes retries: a repeat of `(channel_id, client_msg_id)` returns the
+**existing row as `201`**, and a concurrent retry that loses the unique-index
+race re-reads it.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 201 | `message` | the stored envelope (or the existing row for a repeated `clientMsgId`) |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, kind outside the allow-list, ciphertext not base64 or over 262144 chars, bad uuid, device id outside 8–64 |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | no active membership, or the channel is not in this community |
+| 429 | `rate_limited` | 30 per 60 s per (channel, sender) — `Retry-After: 60` |
+| 500 | `message_create_failed` | the insert failed |
+
+### `POST …/welcomes` · `GET …/welcomes`
+
+The two verbs are deliberately not mirrors: sending is **channel-scoped**,
+reading is **community-scoped**.
+
+**`POST …/channels/[channelId]/welcomes`** — strict body `{ ciphertext
+(base64 16–262144), ratchetTree (base64 16–1 MiB), clientMsgId (uuid),
+recipientUserId (uuid), recipientDeviceId (8–64) }`. One welcome addresses one
+user+device and carries the public ratchet-tree snapshot RFC 9420 distributes
+alongside it; RLS pins the row to its addressee
+(`welcomes_select_recipient_or_sender`) and the ciphertext is only openable by
+the private key matching the target's published key package — policy and
+crypto agree. Same shape as messages: idempotent on `clientMsgId`, and the
+per-channel send budget is shared with message sends.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 201 | `welcome` | the stored addressed envelope + ratchet tree |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, ciphertext/tree not base64 or over size, bad uuids, device id outside 8–64 |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | no active membership, or the channel is not in this community |
+| 429 | `rate_limited` | 30 per 60 s per (channel, sender) — the `community_message` window, shared with sends |
+| 500 | `welcome_create_failed` | the insert failed |
+
+**`GET /api/communities/[id]/welcomes`** — the route lists this community's
+channel ids (≤200) and returns the caller's pending welcomes across them:
+`recipient_user_id = caller`, `seq` ascending, ≤200 rows, each with its
+`ratchet_tree`. The client consumes each one into its local MLS session store;
+a welcome that fails to apply (wrong device, stale epoch) is dropped locally
+without erroring the page. Unthrottled.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `welcomes` | `{ "welcomes": [...] }`, oldest first, addressed to the caller only |
+| 400 | `validation` | id is not a UUID |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | non-member, banned, or missing community |
+| 500 | `welcomes_failed` | the query failed |
+
+### `GET …/sync`
+
+Everything a member client needs for the MLS membership sync:
+`{ "member_ids": [...], "devices": [...] }` — the community's active member
+ids (≤500, **the caller included**) plus key-package rows for those users
+(`user_id, device_id, key_package, signature_public_key, created_at,
+refreshed_at`), newest `refreshed_at` first, capped at `member_ids × 3` rows
+in total. The client diffs that against each channel group's current ratchet
+tree and, for any missing device, builds an Add commit (+ a welcome for the
+addressee) and POSTs the envelopes back through the normal message/welcome
+routes. Runs are idempotent: a device already in the tree is skipped by
+identity match. Membership gate; unthrottled.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `member_ids` / `devices` | active member ids + key packages for them |
+| 400 | `validation` | id is not a UUID |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | non-member, banned, or missing community |
+| 500 | `sync_failed` | the roster or package query failed |
+
+### `GET …/members`
+
+The roster comes from the `community_roster` SECURITY DEFINER RPC — `profiles`
+is SELECT-own and there is no FK path from `community_members` to it, so no
+PostgREST embed can reach another member's alias (the same reason `room_roster`
+exists). Rows: `{ user_id, role, status, joined_at, alias }`, ≤500, oldest
+`joined_at` first, active members only by default. `?include_requested=1` adds
+pending requests and is **staff-only**: a plain member gets `403 forbidden`
+from the route, and the RPC re-gates it so a direct call cannot out-run the
+route. Aliases are the same public identity rooms expose to co-members;
+`user_id` here is the deliberate per-user exception described above. Unthrottled.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `members` | `{ "members": [...] }` — roster rows with aliases |
+| 400 | `validation` | id is not a UUID |
+| 401 | `unauthenticated` | no session |
+| 403 | `forbidden` | `include_requested=1` requested by a plain member |
+| 404 | `not_found` | non-member, banned, or missing community |
+| 500 | `members_failed` | the RPC failed |
+
+### `PATCH` / `DELETE …/members/[userId]`
+
+**`PATCH`** — staff only; both ids must be uuids. Body `.strict()`
+`{ role?: owner | moderator | member, status?: active | requested | banned }`
+(both nullish) with **at least one present** — `{}` is `400 validation`
+("Provide a role or a status to change"). Order: `401` → `400` ids →
+`400 invalid_json` → `400 validation` → `429` → staff gate →
+`set_community_member`, whose guards map to: `member_not_found` → `404`,
+`owner_protected` → `409` (the owner's role and status never change),
+`not_owner` → `403` ("Only the community owner can appoint moderators"),
+`not_staff` → `403` (the gate-vs-race defence). Approving a `requested` row
+bumps `member_count`; moving an active row to `banned` or `requested`
+decrements it (floored at 1). A ban revokes API and RLS access immediately —
+the next request answers `404` — while the cryptographic member removal is
+committed by a remaining member's client on its next sync.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `ok` | `{ "ok": true }` — the change applied |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, bad enum, or no change at all |
+| 401 | `unauthenticated` | no session |
+| 403 | `forbidden` | actor is not staff, or a moderator tried to appoint a moderator |
+| 404 | `not_found` | non-member actor, missing community, or no such member row |
+| 409 | `owner_protected` | the target is the owner |
+| 429 | `rate_limited` | 30 per 60 s per (community, actor) — `Retry-After: 60` |
+| 500 | `member_update_failed` | the RPC failed |
+
+**`DELETE`** — bodyless, unthrottled. Target = caller → the leave RPC (so an
+owner deleting their own row answers `409 owner_cannot_leave`, not
+`owner_protected`, with that path's count bookkeeping), otherwise the staff
+gate first (`403 forbidden` for a plain member, `404` for a non-member), then
+`kick_community_member`. The table carries no `DELETE` grant, so removal and
+the `member_count` decrement exist only inside the definer RPC — guards:
+`member_not_found` → `404`, `owner_protected` → `409`, plus `not_staff` as the
+race defence. The row disappearing means an open community lets a kicked
+member rejoin; a ban (the PATCH path) is what stops re-entry.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 204 | (empty) | the membership row is gone |
+| 400 | `validation` | id not a UUID |
+| 401 | `unauthenticated` | no session |
+| 403 | `forbidden` | a plain member removing somebody else |
+| 404 | `not_found` | non-member actor, missing community/member, or self with no row |
+| 409 | `owner_protected` / `owner_cannot_leave` | kicking the owner / the owner deleting their own row |
+| 500 | `member_remove_failed` | the RPC failed |
+
+### `POST …/reports`
+
+Membership is proven first — a caller outside the community gets `404`
+regardless of what they claim to report. Strict body `{ targetType:
+"message" | "member", targetId (1–128), reason (1–500, trimmed, non-empty),
+contextExcerpt? (≤2000, blank → null) }`. Because content is encrypted the
+server cannot scan it: `contextExcerpt` is **voluntary** — a decrypted slice
+of the reported message the reporter knowingly hands to community staff — and
+without it the target ids, reporter identity and reason are already
+actionable. `reporter_id` is pinned to the session, never read from the body,
+and the `201` returns the inserted row including it: the reporter's own row,
+nothing of anyone else's. Reads and status changes have **no route**:
+`reports_insert_own_member` / `reports_select_own_or_staff` scope the table
+itself (the integration suite probes the PostgREST surface directly — the
+reporter sees their own rows, staff see the community's inbox), and there is
+no status machine to advance.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 201 | `report` | the inserted row (`{ id, community_id, reporter_id, target_type, target_id, reason, context_excerpt, created_at }`) |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, bad `targetType`, empty/oversized reason, excerpt over 2000 |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | non-member or missing community |
+| 429 | `rate_limited` | 20 per 3600 s per (community, reporter) — `Retry-After: 3600` |
+| 500 | `report_create_failed` | the insert failed |
+
+### `POST …/attachments` · `GET …/attachments/[attachmentId]`
+
+**`POST`** — the client uploads ciphertext first to the private
+`community-attachments` bucket (10 MiB file cap, `application/octet-stream`
+only) at `community-attachments/{communityId}/{channelId}/{uuid}`; this row is
+the metadata pointer other members resolve into a signed URL. Strict body
+`{ channelId (uuid), storagePath (format regex), ciphertextSize (1–10485760),
+contentType (≤128, default "application/octet-stream") }`. After the window
+and the membership/channel gates the route re-checks that `storagePath` really
+starts with **this** community's and channel's prefix, else `400 validation`
+— a constraint the schema alone cannot express. The row stores size, type and
+path only: the AES-256-GCM key travelled inside the E2EE message that announced
+the attachment, so the server holds neither plaintext nor key.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 201 | `attachment` | the metadata row (its `storage_path` goes back to the uploader who already knows it) |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, bad uuid, size outside 1–10485760, path failing the regex **or** landing outside this community + channel |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | non-member, banned, or channel not in this community |
+| 429 | `rate_limited` | 20 per 60 s per (community, uploader) — `Retry-After: 60` |
+| 500 | `attachment_create_failed` | the insert failed |
+
+**`GET`** — membership gate → row → `200 { "url": string, "expires_in": 120 }`,
+a signed URL for the ciphertext object; the bucket's select policy re-derives
+membership from the path prefix (three segments, community id second, compared
+as text against `community_members.community_id` — never cast). The bytes are
+still ciphertext; the client's AES-256-GCM key, which arrived inside the E2EE
+message payload, turns them into the original file. Shares the generic
+`download:user:{userId}` window with resource downloads.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `url` / `expires_in` | `{ "url": "...", "expires_in": 120 }` — short-lived signed URL for ciphertext |
+| 400 | `validation` | id not a UUID |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | non-member, banned, or no such attachment in this community |
+| 429 | `rate_limited` | 120 per 60 s per user — one shared window with `GET /api/resources/:id/download` |
+| 500 | `attachment_url_failed` | signing failed |
+
+There is **no `DELETE` route**: the uploader removes the object through the
+`community_attachments_delete_uploader` storage policy and the row through
+`attachments_delete_own` (both uploader-only), so no API surface can delete
+somebody else's attachment.
+
+### `POST /api/communities/devices` · `POST /api/communities/devices/fetch`
+
+**`POST /api/communities/devices`** — publish this browser's key package.
+Strict body `{ deviceId (8–64), keyPackage (base64 64–65536),
+signaturePublicKey (16–256) }`. A package is public MLS credential material by
+design — public keys only, no private key, and registering one joins no
+community (there is no community id in the request). Upsert on
+`(user_id, device_id)` refreshes `refreshed_at`, so a repeat registration is
+another `201`; `devices_insert_own` / `devices_update_own` keep writes
+self-only.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 201 | `device` | the upserted row (a repeat refreshes `refreshed_at`) |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, key package outside 64–65536 chars or not base64 |
+| 401 | `unauthenticated` | no session |
+| 429 | `rate_limited` | 20 per 60 s per user — `Retry-After: 60` |
+| 500 | `device_register_failed` | the upsert failed |
+
+**`POST /api/communities/devices/fetch`** — strict body `{ communityId
+(uuid), userIds: uuid[] (1–50) }`. Member-gated on `communityId`: the packages
+are public credentials, but only community members may bulk-read them — the
+audience that could actually use them in a commit. Returns
+`{ "devices": [...] }`, freshest `refreshed_at` first, capped at
+`userIds × 3` rows in total.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `devices` | key-package rows for the requested users |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, bad uuid, empty or oversize `userIds` |
+| 401 | `unauthenticated` | no session |
+| 404 | `not_found` | the caller is not an active member of `communityId` (missing community included) |
+| 429 | `rate_limited` | 30 per 60 s per user — `Retry-After: 60` |
+| 500 | `keys_fetch_failed` | the query failed |
+
+### `GET /api/communities/gif/search` · `POST /api/communities/gif/fetch`
+
+Both proxies keep the browser away from the GIF provider (the provider learns
+nothing about who searched or from where), and both take their window
+**before** consulting configuration — an unconfigured server still spends the
+slot and then answers `503`. `GIF_PROVIDER` (`tenor` | `giphy`) and
+`GIF_API_KEY` must both be set; the key stays server-side and no
+caller-supplied header is forwarded to the provider.
+
+**`GET …/gif/search?q=`** — `q` is 1–60 chars after trim. The provider call
+runs with an 8 s timeout; results are normalized to
+`{ id, preview_url, full_url, width, height }`, capped at 24, with empty URLs
+filtered out.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `gifs` | `{ "gifs": [{ "id", "preview_url", "full_url", "width", "height" }] }`, ≤24 |
+| 400 | `validation` | missing/blank `q`, or over 60 chars |
+| 401 | `unauthenticated` | no session |
+| 429 | `rate_limited` | 60 per 60 s per user — the one throttled read in this section |
+| 502 | `gif_provider_failed` | the provider answered non-2xx or timed out |
+| 503 | `gif_unavailable` | no `GIF_PROVIDER`/`GIF_API_KEY` configured (the composer hides the tab) |
+
+**`POST …/gif/fetch`** — strict body `{ url }`. Guards in order: provider
+config → `503`; URL parse, `https:` only, hostname on the configured
+provider's allow-list (`media.tenor.com`, `tenor.googleapis.com`,
+`www.googleapis.com` for Tenor; `media.giphy.com`, `i.giphy.com`,
+`api.giphy.com` for Giphy) → `400 validation`; 10 s download with redirects
+followed → non-2xx `502`; re-checked `content-type: image/gif` → `400`;
+empty or over 5 MB → `400`. `200` returns the raw bytes (`content-type:
+image/gif`, `cache-control: private, max-age=3600`); the client then encrypts
+them like any attachment and announces them in an E2EE message, so the stored
+object is ciphertext too.
+
+| Status | Code | Cause |
+| --- | --- | --- |
+| 200 | `image/gif` bytes | the GIF itself, served through the server |
+| 400 | `validation` / `invalid_json` | malformed JSON, unknown key named, non-https or off-allow-list URL, non-GIF response, empty or over 5 MB |
+| 401 | `unauthenticated` | no session |
+| 429 | `rate_limited` | 30 per 60 s per user — `Retry-After: 60` |
+| 502 | `gif_provider_failed` | the download answered non-2xx or timed out |
+| 503 | `gif_unavailable` | no `GIF_PROVIDER`/`GIF_API_KEY` configured |
+
+### Community rate limits
+
+Every row below is one key of the shared mechanism — key naming, fixed
+windows, `Retry-After` (seconds equal to the window) and fail-open behave
+exactly as described in **[Rate limits](#rate-limits-pr-10)**
+(`lib/rate-limit/keys.ts` is the implementation mirror; change both together).
+
+| Route(s) | Key | Max / window |
+| --- | --- | --- |
+| `POST /api/communities` | `community_create:user:{userId}` | 5 / 60 s |
+| `POST /api/communities/[id]/join` | `community_join:{communityId}:{userId}` | 30 / 3600 s |
+| `PATCH /api/communities/[id]/members/[userId]` | `community_member:{communityId}:{userId}` | 30 / 60 s |
+| `POST /api/communities/[id]/channels` | `community_channel:{communityId}:{userId}` | 10 / 3600 s |
+| `POST …/channels/[channelId]/messages` · `POST …/channels/[channelId]/welcomes` | `community_message:{channelId}:{userId}` | 30 / 60 s |
+| `POST /api/communities/[id]/reports` | `community_report:{communityId}:{userId}` | 20 / 3600 s |
+| `POST /api/communities/[id]/attachments` | `community_attachment:{communityId}:{userId}` | 20 / 60 s |
+| `GET /api/communities/[id]/attachments/[attachmentId]` | `download:user:{userId}` (shared with resources) | 120 / 60 s |
+| `POST /api/communities/devices` | `community_device:user:{userId}` | 20 / 60 s |
+| `POST /api/communities/devices/fetch` | `community_keys_fetch:user:{userId}` | 30 / 60 s |
+| `GET /api/communities/gif/search` | `community_gif:user:{userId}` | 60 / 60 s |
+| `POST /api/communities/gif/fetch` | `community_gif_fetch:user:{userId}` | 30 / 60 s |
+
+Unthrottled in this section: every list/detail/roster/message/welcomes/sync
+read (the repo's paginated-read rule), plus — unlike the room surface —
+`PATCH /api/communities/[id]`, `POST …/leave` and
+`DELETE …/members/[userId]`, each already bounded by membership/staff gates
+(and self-`DELETE` is the leave path). The single exception to "reads are
+unthrottled" is `GET gif/search`, which proxies an external provider. The
+attachment download deliberately reuses `download:user:{userId}`, so community
+file fetches and resource downloads draw from one 120/60 budget.

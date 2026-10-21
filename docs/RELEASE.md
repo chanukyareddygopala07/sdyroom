@@ -101,6 +101,8 @@ drift between the codebase's `process.env` reads and this file.
 | `LIVEKIT_URL` | no (live meetings off) | LiveKit server endpoint, `ws://` or `wss://`. Server-side only (never `NEXT_PUBLIC_*`); a partial or non-websocket value counts as unconfigured, logged by variable name only. Without all three keys the Meeting view is disabled with an explanation and `POST /api/rooms/[id]/meeting/token` answers `503 meeting_unavailable`. |
 | `LIVEKIT_API_KEY` | no (live meetings off) | Token-signing issuer. Server-side only. |
 | `LIVEKIT_API_SECRET` | no (live meetings off) | Token-signing secret. Server-side only; never logged, never serialised, never sent to the browser. |
+| `GIF_PROVIDER` | no (GIF tab off) | `tenor` or `giphy` for the community composer. Must be set together with `GIF_API_KEY`; with either missing the tab hides and `GET /api/communities/gif/search` / `POST /api/communities/gif/fetch` answer `503 gif_unavailable`. |
+| `GIF_API_KEY` | no (GIF tab off) | Provider credential; server-side only, never `NEXT_PUBLIC_*`, never forwarded with the client's headers, never logged (`lib/server/log.ts` redacts `api_key` keys). |
 | `VERCEL_URL` | platform | Set by Vercel automatically; used for absolute URL construction. |
 
 Secrets belong in the platform's secret store, never in `.env` files committed

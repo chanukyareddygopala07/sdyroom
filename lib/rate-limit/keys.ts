@@ -273,3 +273,133 @@ export function meetingTokenKey(roomId: string, userId: string): string {
 export function meetingTokenSpec(roomId: string, userId: string): RateLimitSpec {
   return { key: meetingTokenKey(roomId, userId), ...MEETING_TOKEN_LIMIT };
 }
+
+/**
+ * Community message/welcome/commit sends (`POST /api/communities/[id]/channels/[channelId]/messages`).
+ * Mirrors MESSAGE_LIMIT: 30/60s per channel, per sender bounds a scripted
+ * ciphertext flood while sitting far above typing pace. Commits and welcomes
+ * share the slot because they travel the same endpoint and a membership-sync
+ * burst is still rare human-driven work.
+ */
+export const COMMUNITY_MESSAGE_LIMIT = { max: 30, windowSeconds: 60 } as const;
+
+/**
+ * Community creation (`POST /api/communities`). Mirrors ROOM_CREATE_LIMIT:
+ * 5/60s bounds scripted community churn while an organizer never comes close.
+ */
+export const COMMUNITY_CREATE_LIMIT = { max: 5, windowSeconds: 60 } as const;
+
+/** Join/request filing (`POST /api/communities/[id]/join`). */
+export const COMMUNITY_JOIN_LIMIT = { max: 30, windowSeconds: 3600 } as const;
+
+/** Member management (`PATCH /api/communities/[id]/members/[userId]`). */
+export const COMMUNITY_MEMBER_LIMIT = { max: 30, windowSeconds: 60 } as const;
+
+/** Channel creation (`POST /api/communities/[id]/channels`). */
+export const COMMUNITY_CHANNEL_LIMIT = { max: 10, windowSeconds: 3600 } as const;
+
+/** Attachment metadata rows (`POST /api/communities/[id]/attachments`). */
+export const COMMUNITY_ATTACHMENT_LIMIT = { max: 20, windowSeconds: 60 } as const;
+
+/** Device/key-package registration (`POST /api/communities/devices`). */
+export const COMMUNITY_DEVICE_LIMIT = { max: 20, windowSeconds: 60 } as const;
+
+/** Key-package batch fetch (`POST /api/communities/devices/fetch`). */
+export const COMMUNITY_KEYS_FETCH_LIMIT = { max: 30, windowSeconds: 60 } as const;
+
+/** Community reports (`POST /api/communities/[id]/reports`). Mirrors REPORT_LIMIT. */
+export const COMMUNITY_REPORT_LIMIT = { max: 20, windowSeconds: 3600 } as const;
+
+/** GIF search proxy (`GET /api/communities/gif/search`). */
+export const COMMUNITY_GIF_LIMIT = { max: 60, windowSeconds: 60 } as const;
+
+/** GIF fetch proxy (`POST /api/communities/gif/fetch`). */
+export const COMMUNITY_GIF_FETCH_LIMIT = { max: 30, windowSeconds: 60 } as const;
+
+export function communityMessageKey(channelId: string, userId: string): string {
+  return `community_message:${channelId}:${userId}`;
+}
+
+export function communityMessageSpec(channelId: string, userId: string): RateLimitSpec {
+  return { key: communityMessageKey(channelId, userId), ...COMMUNITY_MESSAGE_LIMIT };
+}
+
+export function communityCreateKey(userId: string): string {
+  return `community_create:user:${userId}`;
+}
+
+export function communityCreateSpec(userId: string): RateLimitSpec {
+  return { key: communityCreateKey(userId), ...COMMUNITY_CREATE_LIMIT };
+}
+
+export function communityJoinKey(communityId: string, userId: string): string {
+  return `community_join:${communityId}:${userId}`;
+}
+
+export function communityJoinSpec(communityId: string, userId: string): RateLimitSpec {
+  return { key: communityJoinKey(communityId, userId), ...COMMUNITY_JOIN_LIMIT };
+}
+
+export function communityMemberKey(communityId: string, userId: string): string {
+  return `community_member:${communityId}:${userId}`;
+}
+
+export function communityMemberSpec(communityId: string, userId: string): RateLimitSpec {
+  return { key: communityMemberKey(communityId, userId), ...COMMUNITY_MEMBER_LIMIT };
+}
+
+export function communityChannelKey(communityId: string, userId: string): string {
+  return `community_channel:${communityId}:${userId}`;
+}
+
+export function communityChannelSpec(communityId: string, userId: string): RateLimitSpec {
+  return { key: communityChannelKey(communityId, userId), ...COMMUNITY_CHANNEL_LIMIT };
+}
+
+export function communityAttachmentKey(communityId: string, userId: string): string {
+  return `community_attachment:${communityId}:${userId}`;
+}
+
+export function communityAttachmentSpec(communityId: string, userId: string): RateLimitSpec {
+  return { key: communityAttachmentKey(communityId, userId), ...COMMUNITY_ATTACHMENT_LIMIT };
+}
+
+export function communityDeviceKey(userId: string): string {
+  return `community_device:user:${userId}`;
+}
+
+export function communityDeviceSpec(userId: string): RateLimitSpec {
+  return { key: communityDeviceKey(userId), ...COMMUNITY_DEVICE_LIMIT };
+}
+
+export function communityKeysFetchKey(userId: string): string {
+  return `community_keys_fetch:user:${userId}`;
+}
+
+export function communityKeysFetchSpec(userId: string): RateLimitSpec {
+  return { key: communityKeysFetchKey(userId), ...COMMUNITY_KEYS_FETCH_LIMIT };
+}
+
+export function communityReportKey(communityId: string, userId: string): string {
+  return `community_report:${communityId}:${userId}`;
+}
+
+export function communityReportSpec(communityId: string, userId: string): RateLimitSpec {
+  return { key: communityReportKey(communityId, userId), ...COMMUNITY_REPORT_LIMIT };
+}
+
+export function communityGifKey(userId: string): string {
+  return `community_gif:user:${userId}`;
+}
+
+export function communityGifSpec(userId: string): RateLimitSpec {
+  return { key: communityGifKey(userId), ...COMMUNITY_GIF_LIMIT };
+}
+
+export function communityGifFetchKey(userId: string): string {
+  return `community_gif_fetch:user:${userId}`;
+}
+
+export function communityGifFetchSpec(userId: string): RateLimitSpec {
+  return { key: communityGifFetchKey(userId), ...COMMUNITY_GIF_FETCH_LIMIT };
+}

@@ -561,12 +561,16 @@ describe("room management (edit, lifecycle, delete)", () => {
       ).toBe("f");
     });
 
-    it("keeps exactly the four storage policies, including the room-owner delete", () => {
+    it("pins the storage surface: four room policies plus the three community ones", () => {
+      // Schema-wide canary: any new policy on storage.objects must be a
+      // deliberate diff here. 4 study_resources (rooms) + 3
+      // community_attachments (migration 0025, also named in
+      // tests/integration/communities.test.ts).
       expect(
         psql(
           "select count(*) from pg_policies where schemaname = 'storage' and tablename = 'objects';",
         ),
-      ).toBe("4");
+      ).toBe("7");
       expect(
         psql(
           "select count(*) from pg_policies where schemaname = 'storage' " +

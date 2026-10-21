@@ -63,6 +63,27 @@ export async function InvitationsNavLink() {
 }
 
 /**
+ * Communities (E2EE): encrypted study communities. Session-gated like the
+ * account-adjacent links above — a signed-out visitor is not pointed at a
+ * route that would bounce them to login — and the session read is why
+ * callers mount this inside its own `<Suspense>`.
+ */
+export async function CommunitiesNavLink() {
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getClaims();
+
+  if (!data?.claims) {
+    return null;
+  }
+
+  return (
+    <ActiveNavLink href="/communities" className={LINK_CLASS}>
+      Communities
+    </ActiveNavLink>
+  );
+}
+
+/**
  * Study analytics are the caller's own panel (PR 16), so the link only
  * appears once a session exists — same gate and `<Suspense>` rationale as
  * the two links above.
